@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "flac/src/share/grabbag",
+		"source" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/flac/src/share/grabbag"
+	}
+}

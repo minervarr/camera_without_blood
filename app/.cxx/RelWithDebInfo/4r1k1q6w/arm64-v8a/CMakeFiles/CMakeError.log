@@ -1,0 +1,292 @@
+Performing C SOURCE FILE Test Iconv_IS_BUILT_IN failed with the following output:
+Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_ac90d && [1/2] Building C object CMakeFiles/cmTC_ac90d.dir/src.c.o
+FAILED: CMakeFiles/cmTC_ac90d.dir/src.c.o 
+C:\PPProgam\android_sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe --target=aarch64-none-linux-android26 --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -DIconv_IS_BUILT_IN  -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fPIE -MD -MT CMakeFiles/cmTC_ac90d.dir/src.c.o -MF CMakeFiles\cmTC_ac90d.dir\src.c.o.d -o CMakeFiles/cmTC_ac90d.dir/src.c.o -c C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:8:14: error: call to undeclared function 'iconv_open'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+    8 |         ic = iconv_open("to", "from");
+      |              ^
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:8:12: error: incompatible integer to pointer conversion assigning to 'iconv_t' (aka 'struct __iconv_t *') from 'int' [-Wint-conversion]
+    8 |         ic = iconv_open("to", "from");
+      |            ^ ~~~~~~~~~~~~~~~~~~~~~~~~
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:9:9: error: call to undeclared function 'iconv'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+    9 |         iconv(ic, &a, &i, &b, &j);
+      |         ^
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:10:9: error: call to undeclared function 'iconv_close'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   10 |         iconv_close(ic);
+      |         ^
+4 errors generated.
+ninja: build stopped: subcommand failed.
+
+
+Source file was:
+
+      #include <stddef.h>
+      #include <iconv.h>
+      int main() {
+        char *a, *b;
+        size_t i, j;
+        iconv_t ic;
+        ic = iconv_open("to", "from");
+        iconv(ic, &a, &i, &b, &j);
+        iconv_close(ic);
+      }
+      
+Determining if the include file x86intrin.h exists failed with the following output:
+Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_3821c && [1/2] Building C object CMakeFiles/cmTC_3821c.dir/CheckIncludeFile.c.o
+FAILED: CMakeFiles/cmTC_3821c.dir/CheckIncludeFile.c.o 
+C:\PPProgam\android_sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe --target=aarch64-none-linux-android26 --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot   -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Waggregate-return -Wcast-align -Wnested-externs -Wshadow -Wundef -Wmissing-declarations -Winline -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fPIE -MD -MT CMakeFiles/cmTC_3821c.dir/CheckIncludeFile.c.o -MF CMakeFiles\cmTC_3821c.dir\CheckIncludeFile.c.o.d -o CMakeFiles/cmTC_3821c.dir/CheckIncludeFile.c.o -c C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c
+In file included from C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c:1:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/x86intrin.h:15:
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/immintrin.h:14:2: error: "This header is only meant to be used on x86 and x64 architecture"
+   14 | #error "This header is only meant to be used on x86 and x64 architecture"
+      |  ^
+In file included from C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c:1:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/x86intrin.h:15:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/immintrin.h:17:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/x86gprintrin.h:14:
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/hresetintrin.h:42:27: error: invalid input constraint 'a' in asm
+   42 |   __asm__ ("hreset $0" :: "a"(__eax));
+      |                           ^
+In file included from C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c:1:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/x86intrin.h:15:
+In file included from C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/immintrin.h:20:
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:14:2: error: "This header is only meant to be used on x86 and x64 architecture"
+   14 | #error "This header is only meant to be used on x86 and x64 architecture"
+      |  ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:165:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  165 |     return __trunc64(__builtin_ia32_packsswb128(
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  166 |         (__v8hi)__builtin_shufflevector(__m1, __m2, 0, 1), (__v8hi){}));
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:191:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  191 |     return __trunc64(__builtin_ia32_packssdw128(
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  192 |         (__v4si)__builtin_shufflevector(__m1, __m2, 0, 1), (__v4si){}));
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:217:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  217 |     return __trunc64(__builtin_ia32_packuswb128(
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  218 |         (__v8hi)__builtin_shufflevector(__m1, __m2, 0, 1), (__v8hi){}));
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:707:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  707 |     return __trunc64(__builtin_ia32_pmaddwd128((__v8hi)__anyext128(__m1),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  708 |                                                (__v8hi)__anyext128(__m2)));
+      |                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:729:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  729 |     return __trunc64(__builtin_ia32_pmulhw128((__v8hi)__anyext128(__m1),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  730 |                                               (__v8hi)__anyext128(__m2)));
+      |                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:774:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  774 |     return __trunc64(__builtin_ia32_psllw128((__v8hi)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  775 |                                              (__v8hi)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:797:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  797 |     return __trunc64(__builtin_ia32_psllwi128((__v8hi)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  798 |                                               __count));
+      |                                               ~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:821:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  821 |     return __trunc64(__builtin_ia32_pslld128((__v4si)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  822 |                                              (__v4si)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:844:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  844 |     return __trunc64(__builtin_ia32_pslldi128((__v4si)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  845 |                                               __count));
+      |                                               ~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:865:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  865 |     return __trunc64(__builtin_ia32_psllq128((__v2di)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  866 |                                              (__v2di)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:886:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  886 |     return __trunc64(__builtin_ia32_psllqi128((__v2di)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  887 |                                               __count));
+      |                                               ~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:911:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  911 |     return __trunc64(__builtin_ia32_psraw128((__v8hi)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  912 |                                              (__v8hi)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:935:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  935 |     return __trunc64(__builtin_ia32_psrawi128((__v8hi)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  936 |                                               __count));
+      |                                               ~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:960:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  960 |     return __trunc64(__builtin_ia32_psrad128((__v4si)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  961 |                                              (__v4si)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:984:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+  984 |     return __trunc64(__builtin_ia32_psradi128((__v4si)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  985 |                                               __count));
+      |                                               ~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:1008:12: error: invalid conversion between vector type '__v2di' (vector of 2 'long long' values) and integer type 'int' of different size
+ 1008 |     return __trunc64(__builtin_ia32_psrlw128((__v8hi)__anyext128(__m),
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 1009 |                                              (__v8hi)__anyext128(__count)));
+      |                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/mmintrin.h:59:35: note: expanded from macro '__trunc64'
+   59 |   (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+      |                                   ^~~~~~~~~~~
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+ninja: build stopped: subcommand failed.
+
+
+
+Performing C SOURCE FILE Test CMAKE_HAVE_LIBC_PTHREAD failed with the following output:
+Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_81438 && [1/2] Building C object CMakeFiles/cmTC_81438.dir/src.c.o
+FAILED: CMakeFiles/cmTC_81438.dir/src.c.o 
+C:\PPProgam\android_sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe --target=aarch64-none-linux-android26 --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -DCMAKE_HAVE_LIBC_PTHREAD  -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Waggregate-return -Wcast-align -Wnested-externs -Wshadow -Wundef -Wmissing-declarations -Winline -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fPIE -MD -MT CMakeFiles/cmTC_81438.dir/src.c.o -MF CMakeFiles\cmTC_81438.dir\src.c.o.d -o CMakeFiles/cmTC_81438.dir/src.c.o -c C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:13:3: error: call to undeclared function 'pthread_cancel'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   13 |   pthread_cancel(thread);
+      |   ^
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:13:3: note: did you mean 'pthread_once'?
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/pthread.h:250:5: note: 'pthread_once' declared here
+  250 | int pthread_once(pthread_once_t* _Nonnull __once, void (* _Nonnull __init_routine)(void));
+      |     ^
+1 error generated.
+ninja: build stopped: subcommand failed.
+
+
+Source file was:
+#include <pthread.h>
+
+static void* test_func(void* data)
+{
+  return data;
+}
+
+int main(void)
+{
+  pthread_t thread;
+  pthread_create(&thread, NULL, test_func, NULL);
+  pthread_detach(thread);
+  pthread_cancel(thread);
+  pthread_join(thread, NULL);
+  pthread_atfork(NULL, NULL, NULL);
+  pthread_exit(NULL);
+
+  return 0;
+}
+
+Determining if the include file cpuid.h exists failed with the following output:
+Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_b70db && [1/2] Building C object CMakeFiles/cmTC_b70db.dir/CheckIncludeFile.c.o
+FAILED: CMakeFiles/cmTC_b70db.dir/CheckIncludeFile.c.o 
+C:\PPProgam\android_sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe --target=aarch64-none-linux-android26 --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot   -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Waggregate-return -Wcast-align -Wnested-externs -Wshadow -Wundef -Wmissing-declarations -Winline -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fPIE -MD -MT CMakeFiles/cmTC_b70db.dir/CheckIncludeFile.c.o -MF CMakeFiles\cmTC_b70db.dir\CheckIncludeFile.c.o.d -o CMakeFiles/cmTC_b70db.dir/CheckIncludeFile.c.o -c C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c
+In file included from C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/CheckIncludeFile.c:1:
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:14:2: error: this header is for x86 only
+   14 | #error this header is for x86 only
+      |  ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:310:5: error: invalid output constraint '=a' in asm
+  310 |     __cpuid(__leaf, __eax, __ebx, __ecx, __edx);
+      |     ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:274:11: note: expanded from macro '__cpuid'
+  274 |         : "=a"(__eax), "=r" (__ebx), "=c"(__ecx), "=d"(__edx) \
+      |           ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:325:5: error: invalid output constraint '=a' in asm
+  325 |     __cpuid(__leaf, *__eax, *__ebx, *__ecx, *__edx);
+      |     ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:274:11: note: expanded from macro '__cpuid'
+  274 |         : "=a"(__eax), "=r" (__ebx), "=c"(__ecx), "=d"(__edx) \
+      |           ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:339:5: error: invalid output constraint '=a' in asm
+  339 |     __cpuid_count(__leaf, __subleaf, *__eax, *__ebx, *__ecx, *__edx);
+      |     ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:281:11: note: expanded from macro '__cpuid_count'
+  281 |         : "=a"(__eax), "=r" (__ebx), "=c"(__ecx), "=d"(__edx) \
+      |           ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:347:3: error: invalid output constraint '=a' in asm
+  347 |   __cpuid_count(__leaf, __subleaf, __cpu_info[0], __cpu_info[1], __cpu_info[2],
+      |   ^
+C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include/cpuid.h:281:11: note: expanded from macro '__cpuid_count'
+  281 |         : "=a"(__eax), "=r" (__ebx), "=c"(__ecx), "=d"(__edx) \
+      |           ^
+5 errors generated.
+ninja: build stopped: subcommand failed.
+
+
+
+Performing C SOURCE FILE Test Intl_IS_BUILT_IN failed with the following output:
+Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_636d1 && [1/2] Building C object CMakeFiles/cmTC_636d1.dir/src.c.o
+FAILED: CMakeFiles/cmTC_636d1.dir/src.c.o 
+C:\PPProgam\android_sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe --target=aarch64-none-linux-android26 --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -DIntl_IS_BUILT_IN  -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Waggregate-return -Wcast-align -Wnested-externs -Wshadow -Wundef -Wmissing-declarations -Winline -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fPIE -MD -MT CMakeFiles/cmTC_636d1.dir/src.c.o -MF CMakeFiles\cmTC_636d1.dir\src.c.o.d -o CMakeFiles/cmTC_636d1.dir/src.c.o -c C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/CMakeFiles/CMakeTmp/src.c:1:10: fatal error: 'libintl.h' file not found
+    1 | #include <libintl.h>
+      |          ^~~~~~~~~~~
+1 error generated.
+ninja: build stopped: subcommand failed.
+
+
+Source file was:
+#include <libintl.h>
+int main(void) {
+  gettext("");
+  dgettext("", "");
+  dcgettext("", "", 0);
+  return 0;
+}
+

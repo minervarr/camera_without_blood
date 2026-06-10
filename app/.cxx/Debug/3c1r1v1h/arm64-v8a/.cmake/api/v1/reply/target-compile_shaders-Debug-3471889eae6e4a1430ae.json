@@ -1,0 +1,108 @@
+{
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_custom_target"
+		],
+		"files" : 
+		[
+			"CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 86,
+				"parent" : 0
+			}
+		]
+	},
+	"id" : "compile_shaders::@6890427a1f51a3e7e1df",
+	"name" : "compile_shaders",
+	"paths" : 
+	{
+		"build" : ".",
+		"source" : "."
+	},
+	"sourceGroups" : 
+	[
+		{
+			"name" : "",
+			"sourceIndexes" : 
+			[
+				0
+			]
+		},
+		{
+			"name" : "CMake Rules",
+			"sourceIndexes" : 
+			[
+				1,
+				2,
+				3,
+				4,
+				5,
+				6,
+				7
+			]
+		}
+	],
+	"sources" : 
+	[
+		{
+			"backtrace" : 1,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/compile_shaders",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/compile_shaders.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/composite_frag.spv.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/composite_vert.spv.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/coverage.spv.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/overlay_frag.spv.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/overlay_vert.spv.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/src/main/assets/shaders/tiling.spv.rule",
+			"sourceGroupIndex" : 1
+		}
+	],
+	"type" : "UTILITY"
+}

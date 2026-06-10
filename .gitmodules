@@ -1,0 +1,26 @@
+[submodule "libs/vulkan_canvas_engine"]
+	path = libs/vulkan_canvas_engine
+	url = https://github.com/minervarr/vulkan_canvas_engine
+
+[submodule "libs/archive_engine"]
+	path = libs/archive_engine
+	url = https://github.com/minervarr/archive_engine
+
+[submodule "libs/audio_engine"]
+	path = libs/audio_engine
+	url = https://github.com/minervarr/audio_engine
+
+[submodule "libs/regen_atlas"]
+	path = libs/regen_atlas
+	url = https://github.com/minervarr/regen_atlas
+
+[submodule "libs/libebml"]
+	path = libs/libebml
+	url = https://github.com/Matroska-Org/libebml
+
+[submodule "libs/libmatroska"]
+	path = libs/libmatroska
+	url = https://github.com/Matroska-Org/libmatroska
+[submodule "libs/flac"]
+	path = libs/flac
+	url = https://github.com/xiph/flac

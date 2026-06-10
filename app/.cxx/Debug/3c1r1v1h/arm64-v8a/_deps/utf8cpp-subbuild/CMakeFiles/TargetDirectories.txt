@@ -1,0 +1,3 @@
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/_deps/utf8cpp-subbuild/CMakeFiles/utf8cpp-populate.dir
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/_deps/utf8cpp-subbuild/CMakeFiles/edit_cache.dir
+C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/_deps/utf8cpp-subbuild/CMakeFiles/rebuild_cache.dir

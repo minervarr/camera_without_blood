@@ -1,0 +1,13 @@
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\app\.cxx\RelWithDebInfo\4r1k1q6w\arm64-v8a\_deps\utf8cpp-src\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\app\src\main\cpp\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\libFLAC\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\share\getopt\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\share\grabbag\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\share\replaygain_analysis\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\share\replaygain_synthesis\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\flac\src\share\utf8\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\libebml\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\libmatroska\CMakeLists.txt
+C:\Users\incxiuefb\Documents\Files\clone\camera_without_blood\libs\vulkan_canvas_engine\vulkan_font_engine\app\src\main\freetype\CMakeLists.txt

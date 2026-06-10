@@ -1,0 +1,61 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"install"
+		],
+		"files" : 
+		[
+			"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/flac/src/libFLAC/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 117,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 128,
+				"parent" : 0
+			}
+		]
+	},
+	"installers" : 
+	[
+		{
+			"backtrace" : 1,
+			"component" : "Unspecified",
+			"destination" : "lib",
+			"paths" : 
+			[
+				"flac/src/libFLAC/libFLAC.a"
+			],
+			"targetId" : "FLAC::@0febc6bb69fbc0e240a4",
+			"targetIndex" : 0,
+			"type" : "target"
+		},
+		{
+			"backtrace" : 2,
+			"component" : "Unspecified",
+			"destination" : "lib/pkgconfig",
+			"paths" : 
+			[
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/flac/src/libFLAC/flac.pc"
+			],
+			"type" : "file"
+		}
+	],
+	"paths" : 
+	{
+		"build" : "flac/src/libFLAC",
+		"source" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/flac/src/libFLAC"
+	}
+}

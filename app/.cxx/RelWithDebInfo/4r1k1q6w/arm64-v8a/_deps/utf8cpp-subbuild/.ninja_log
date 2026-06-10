@@ -1,0 +1,21 @@
+# ninja log v5
+0	179	8021779419021352	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-mkdir	9f4950daaa220c08
+0	179	8021779419021352	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-mkdir	9f4950daaa220c08
+180	3249	8021779449728592	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-download	357fc8b656d268df
+180	3249	8021779449728592	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-download	357fc8b656d268df
+3250	3413	0	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-update	660a7446fe39cf2
+3250	3413	0	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-update	660a7446fe39cf2
+3414	3472	8021779451962167	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-patch	52acd63c785cc33
+3414	3472	8021779451962167	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-patch	52acd63c785cc33
+3473	3531	8021779452546973	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-configure	71eacc8fd941e8d1
+3473	3531	8021779452546973	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-configure	71eacc8fd941e8d1
+3531	3592	8021779453147937	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-build	878b3aed1f228693
+3531	3592	8021779453147937	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-build	878b3aed1f228693
+3592	3657	8021779453803011	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-install	af2ef4180a3ee27a
+3592	3657	8021779453803011	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-install	af2ef4180a3ee27a
+3657	3722	8021779454460958	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-test	8a84c5f9ebfea707
+3657	3722	8021779454460958	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-test	8a84c5f9ebfea707
+3723	3811	8021779455343732	CMakeFiles/utf8cpp-populate-complete	33e41c35f4516ed2
+3723	3811	8021779455343732	utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-done	33e41c35f4516ed2
+3723	3811	8021779455343732	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/CMakeFiles/utf8cpp-populate-complete	33e41c35f4516ed2
+3723	3811	8021779455343732	C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/_deps/utf8cpp-subbuild/utf8cpp-populate-prefix/src/utf8cpp-populate-stamp/utf8cpp-populate-done	33e41c35f4516ed2

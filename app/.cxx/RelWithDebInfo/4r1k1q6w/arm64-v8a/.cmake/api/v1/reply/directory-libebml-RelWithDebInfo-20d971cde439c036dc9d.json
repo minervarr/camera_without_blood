@@ -1,0 +1,158 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"install"
+		],
+		"files" : 
+		[
+			"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 208,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 214,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 215,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 239,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 248,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 249,
+				"parent" : 0
+			}
+		]
+	},
+	"installers" : 
+	[
+		{
+			"backtrace" : 1,
+			"component" : "Unspecified",
+			"destination" : "lib",
+			"paths" : 
+			[
+				"libebml/libebml.a"
+			],
+			"targetId" : "ebml::@6ea6a5525fa2bb92562b",
+			"targetIndex" : 3,
+			"type" : "target"
+		},
+		{
+			"backtrace" : 2,
+			"component" : "Unspecified",
+			"destination" : "include/ebml",
+			"paths" : 
+			[
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlBinary.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlConfig.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlContexts.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlCrc32.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlDate.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlDummy.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlElement.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlEndian.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlFloat.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlHead.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlId.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlMaster.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlSInteger.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlStream.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlString.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlTypes.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlUInteger.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlUnicodeString.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlVersion.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/EbmlVoid.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/IOCallback.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/MemIOCallback.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/MemReadIOCallback.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/SafeReadIOCallback.h",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml/ebml/StdIOCallback.h"
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 3,
+			"component" : "Unspecified",
+			"destination" : "include/ebml",
+			"paths" : 
+			[
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/libebml/ebml_export.h"
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 4,
+			"component" : "Unspecified",
+			"destination" : "lib/pkgconfig",
+			"paths" : 
+			[
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/libebml/libebml.pc"
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 5,
+			"component" : "Unspecified",
+			"destination" : "lib/cmake/EBML",
+			"exportName" : "EBMLTargets",
+			"exportTargets" : 
+			[
+				{
+					"id" : "ebml::@6ea6a5525fa2bb92562b",
+					"index" : 3
+				}
+			],
+			"paths" : 
+			[
+				"libebml/CMakeFiles/Export/lib/cmake/EBML/EBMLTargets.cmake"
+			],
+			"type" : "export"
+		},
+		{
+			"backtrace" : 6,
+			"component" : "Unspecified",
+			"destination" : "lib/cmake/EBML",
+			"paths" : 
+			[
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/libebml/EBMLConfig.cmake",
+				"C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/RelWithDebInfo/4r1k1q6w/arm64-v8a/libebml/EBMLConfigVersion.cmake"
+			],
+			"type" : "file"
+		}
+	],
+	"paths" : 
+	{
+		"build" : "libebml",
+		"source" : "C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/libs/libebml"
+	}
+}

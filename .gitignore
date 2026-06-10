@@ -1,0 +1,38 @@
+# Build directories
+build/
+.gradle/
+gradle/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradle
+gradlew
+gradlew.bat
+local.properties
+
+# Build outputs
+*.apk
+*.aab
+*.so
+*.o
+*.a
+
+# Logs
+logcat.txt
+adb_log.txt
+samsung_logs.txt
+
+# Misc generated files
+*.jks
+*.keystore
+cam_dump.txt
+_verify/
