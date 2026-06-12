@@ -29,13 +29,13 @@ The CXX compiler identification is Clang, found in "C:/Users/incxiuefb/Documents
 Detecting C compiler ABI info compiled with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_07bfa && [1/2] Building C object CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_c4abb && [1/2] Building C object CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o
 Android (13989888, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)
 Target: aarch64-none-linux-android26
 Thread model: posix
 InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin
  (in-process)
- "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_07bfa.dir\\CMakeCCompilerABI.c.o.d" -MT CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o -x c C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCCompilerABI.c
+ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_c4abb.dir\\CMakeCCompilerABI.c.o.d" -MT CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o -x c C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCCompilerABI.c
 clang -cc1 version 21.0.0 based upon LLVM 21.0.0 default target x86_64-w64-windows-gnu
 ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include"
 ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include"
@@ -45,12 +45,12 @@ ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolch
  C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android
  C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include
 End of search list.
-[2/2] Linking C executable cmTC_07bfa
+[2/2] Linking C executable cmTC_c4abb
 Android (13989888, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)
 Target: aarch64-none-linux-android26
 Thread model: posix
 InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin
- "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_07bfa C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o
+ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_c4abb C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o
 
 
 
@@ -71,13 +71,13 @@ Parsed C implicit link information from above output:
   link line regex: [^( *|.*[/\])(ld\.lld\.exe|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\]+-)?ld|collect2)[^/\]*( |$)]
   ignore line: [Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp]
   ignore line: []
-  ignore line: [Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_07bfa && [1/2] Building C object CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o]
+  ignore line: [Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_c4abb && [1/2] Building C object CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o]
   ignore line: [Android (13989888  based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)]
   ignore line: [Target: aarch64-none-linux-android26]
   ignore line: [Thread model: posix]
   ignore line: [InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin]
   ignore line: [ (in-process)]
-  ignore line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_07bfa.dir\\CMakeCCompilerABI.c.o.d" -MT CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o -x c C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCCompilerABI.c]
+  ignore line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCCompilerABI.c -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_c4abb.dir\\CMakeCCompilerABI.c.o.d" -MT CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o -x c C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCCompilerABI.c]
   ignore line: [clang -cc1 version 21.0.0 based upon LLVM 21.0.0 default target x86_64-w64-windows-gnu]
   ignore line: [ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include"]
   ignore line: [ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include"]
@@ -87,12 +87,12 @@ Parsed C implicit link information from above output:
   ignore line: [ C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android]
   ignore line: [ C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include]
   ignore line: [End of search list.]
-  ignore line: [[2/2] Linking C executable cmTC_07bfa]
+  ignore line: [[2/2] Linking C executable cmTC_c4abb]
   ignore line: [Android (13989888  based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)]
   ignore line: [Target: aarch64-none-linux-android26]
   ignore line: [Thread model: posix]
   ignore line: [InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin]
-  link line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_07bfa C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o]
+  link line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_c4abb C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o]
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld] ==> ignore
     arg [--sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot] ==> ignore
     arg [-EL] ==> ignore
@@ -109,7 +109,7 @@ Parsed C implicit link information from above output:
     arg [-dynamic-linker] ==> ignore
     arg [/system/bin/linker64] ==> ignore
     arg [-o] ==> ignore
-    arg [cmTC_07bfa] ==> ignore
+    arg [cmTC_c4abb] ==> ignore
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o] ==> obj [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o]
     arg [-LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64] ==> dir [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64]
     arg [-LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26] ==> dir [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26]
@@ -120,7 +120,7 @@ Parsed C implicit link information from above output:
     arg [--no-undefined-version] ==> ignore
     arg [--fatal-warnings] ==> ignore
     arg [--no-undefined] ==> ignore
-    arg [CMakeFiles/cmTC_07bfa.dir/CMakeCCompilerABI.c.o] ==> ignore
+    arg [CMakeFiles/cmTC_c4abb.dir/CMakeCCompilerABI.c.o] ==> ignore
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a] ==> lib [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a]
     arg [-l:libunwind.a] ==> lib [-l:libunwind.a]
     arg [-ldl] ==> lib [dl]
@@ -144,13 +144,13 @@ Parsed C implicit link information from above output:
 Detecting CXX compiler ABI info compiled with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_9e478 && [1/2] Building CXX object CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_11006 && [1/2] Building CXX object CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o
 Android (13989888, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)
 Target: aarch64-none-linux-android26
 Thread model: posix
 InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin
  (in-process)
- "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_9e478.dir\\CMakeCXXCompilerABI.cpp.o.d" -MT CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1 -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -fdeprecated-macro -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -x c++ C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCXXCompilerABI.cpp
+ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_11006.dir\\CMakeCXXCompilerABI.cpp.o.d" -MT CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1 -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -fdeprecated-macro -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -x c++ C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCXXCompilerABI.cpp
 clang -cc1 version 21.0.0 based upon LLVM 21.0.0 default target x86_64-w64-windows-gnu
 ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include"
 ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include"
@@ -161,12 +161,12 @@ ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolch
  C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android
  C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include
 End of search list.
-[2/2] Linking CXX executable cmTC_9e478
+[2/2] Linking CXX executable cmTC_11006
 Android (13989888, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)
 Target: aarch64-none-linux-android26
 Thread model: posix
 InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin
- "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_9e478 C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lm C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o
+ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_11006 C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lm C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o
 
 
 
@@ -189,13 +189,13 @@ Parsed CXX implicit link information from above output:
   link line regex: [^( *|.*[/\])(ld\.lld\.exe|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\]+-)?ld|collect2)[^/\]*( |$)]
   ignore line: [Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp]
   ignore line: []
-  ignore line: [Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_9e478 && [1/2] Building CXX object CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o]
+  ignore line: [Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_11006 && [1/2] Building CXX object CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o]
   ignore line: [Android (13989888  based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)]
   ignore line: [Target: aarch64-none-linux-android26]
   ignore line: [Thread model: posix]
   ignore line: [InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin]
   ignore line: [ (in-process)]
-  ignore line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_9e478.dir\\CMakeCXXCompilerABI.cpp.o.d" -MT CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1 -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -fdeprecated-macro -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -x c++ C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCXXCompilerABI.cpp]
+  ignore line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe" -cc1 -triple aarch64-none-linux-android26 -emit-obj -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name CMakeCXXCompilerABI.cpp -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=non-leaf -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -enable-tlsdesc -target-cpu generic -target-feature +v8a -target-feature +fp-armv8 -target-feature +neon -target-feature +fix-cortex-a53-835769 -target-abi aapcs -debug-info-kind=constructor -dwarf-version=4 -debugger-tuning=gdb -fdebug-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -v -ffunction-sections -fdata-sections -fcoverage-compilation-dir=C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp -resource-dir C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21 -dependency-file "CMakeFiles\\cmTC_11006.dir\\CMakeCXXCompilerABI.cpp.o.d" -MT CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -sys-header-deps -D ANDROID -D _FORTIFY_SOURCE=2 -isysroot C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1 -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/include -internal-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include -internal-externc-isystem C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include -Wformat -fdeprecated-macro -ferror-limit 19 -femulated-tls -stack-protector 2 -fno-signed-char -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -target-feature +outline-atomics -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -x c++ C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CMakeCXXCompilerABI.cpp]
   ignore line: [clang -cc1 version 21.0.0 based upon LLVM 21.0.0 default target x86_64-w64-windows-gnu]
   ignore line: [ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/local/include"]
   ignore line: [ignoring nonexistent directory "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/include"]
@@ -206,12 +206,12 @@ Parsed CXX implicit link information from above output:
   ignore line: [ C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android]
   ignore line: [ C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include]
   ignore line: [End of search list.]
-  ignore line: [[2/2] Linking CXX executable cmTC_9e478]
+  ignore line: [[2/2] Linking CXX executable cmTC_11006]
   ignore line: [Android (13989888  based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)]
   ignore line: [Target: aarch64-none-linux-android26]
   ignore line: [Thread model: posix]
   ignore line: [InstalledDir: C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin]
-  link line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_9e478 C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lm C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o]
+  link line: [ "C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld" --sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot -EL --fix-cortex-a53-843419 -z now -z relro -z max-page-size=16384 --no-rosegment --hash-style=gnu --eh-frame-hdr -m aarch64linux -pie -dynamic-linker /system/bin/linker64 -o cmTC_11006 C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26 -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android -LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib --build-id=sha1 --no-rosegment --no-undefined-version --fatal-warnings --no-undefined CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o -lc++ -lm C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl -lc C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a -l:libunwind.a -ldl C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtend_android.o]
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/ld.lld] ==> ignore
     arg [--sysroot=C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot] ==> ignore
     arg [-EL] ==> ignore
@@ -228,7 +228,7 @@ Parsed CXX implicit link information from above output:
     arg [-dynamic-linker] ==> ignore
     arg [/system/bin/linker64] ==> ignore
     arg [-o] ==> ignore
-    arg [cmTC_9e478] ==> ignore
+    arg [cmTC_11006] ==> ignore
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o] ==> obj [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26/crtbegin_dynamic.o]
     arg [-LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64] ==> dir [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/aarch64]
     arg [-LC:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26] ==> dir [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/aarch64-linux-android/26]
@@ -239,7 +239,7 @@ Parsed CXX implicit link information from above output:
     arg [--no-undefined-version] ==> ignore
     arg [--fatal-warnings] ==> ignore
     arg [--no-undefined] ==> ignore
-    arg [CMakeFiles/cmTC_9e478.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+    arg [CMakeFiles/cmTC_11006.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
     arg [-lc++] ==> lib [c++]
     arg [-lm] ==> lib [m]
     arg [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a] ==> lib [C:/PPProgam/android_sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/21/lib/linux/libclang_rt.builtins-aarch64-android.a]
@@ -265,29 +265,29 @@ Parsed CXX implicit link information from above output:
 Determining if the include file unistd.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_4a4f8 && [1/2] Building C object CMakeFiles/cmTC_4a4f8.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_4a4f8
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_03255 && [1/2] Building C object CMakeFiles/cmTC_03255.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_03255
 
 
 
 Determining if the include file fcntl.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_0a3df && [1/2] Building C object CMakeFiles/cmTC_0a3df.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_0a3df
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_5a4f3 && [1/2] Building C object CMakeFiles/cmTC_5a4f3.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_5a4f3
 
 
 
 Performing C SOURCE FILE Test HAVE_MBSTATE succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_39eb3 && [1/2] Building C object CMakeFiles/cmTC_39eb3.dir/src.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_03fe2 && [1/2] Building C object CMakeFiles/cmTC_03fe2.dir/src.c.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.c:4:13: warning: a function declaration without a prototype is deprecated in all versions of C [-Wstrict-prototypes]
     4 |     int main() { return 0; }
       |             ^
       |              void
 1 warning generated.
-[2/2] Linking C executable cmTC_39eb3
+[2/2] Linking C executable cmTC_03fe2
 
 
 Source file was:
@@ -298,13 +298,13 @@ Source file was:
 Performing C SOURCE FILE Test DODEFINE_EXTENSIONS succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_461b4 && [1/2] Building C object CMakeFiles/cmTC_461b4.dir/src.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_ace31 && [1/2] Building C object CMakeFiles/cmTC_ace31.dir/src.c.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.c:36:13: warning: a function declaration without a prototype is deprecated in all versions of C [-Wstrict-prototypes]
    36 |     int main() { return 0; }
       |             ^
       |              void
 1 warning generated.
-[2/2] Linking C executable cmTC_461b4
+[2/2] Linking C executable cmTC_ace31
 
 
 Source file was:
@@ -347,69 +347,69 @@ Source file was:
 Determining if the include file byteswap.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_c6e98 && [1/2] Building C object CMakeFiles/cmTC_c6e98.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_c6e98
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_883de && [1/2] Building C object CMakeFiles/cmTC_883de.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_883de
 
 
 
 Determining if the include file inttypes.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_edfab && [1/2] Building C object CMakeFiles/cmTC_edfab.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_edfab
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_3b506 && [1/2] Building C object CMakeFiles/cmTC_3b506.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_3b506
 
 
 
 Determining if the include file stdint.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_62ec4 && [1/2] Building C object CMakeFiles/cmTC_62ec4.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_62ec4
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_932e8 && [1/2] Building C object CMakeFiles/cmTC_932e8.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_932e8
 
 
 
 Determining if the include file stdbool.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_03db5 && [1/2] Building C object CMakeFiles/cmTC_03db5.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_03db5
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_3b32d && [1/2] Building C object CMakeFiles/cmTC_3b32d.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_3b32d
 
 
 
 Determining if the include file arm_neon.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_7d5f6 && [1/2] Building C object CMakeFiles/cmTC_7d5f6.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_7d5f6
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_d623f && [1/2] Building C object CMakeFiles/cmTC_d623f.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_d623f
 
 
 
 Determining if the include file threads.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_0ef0a && [1/2] Building C object CMakeFiles/cmTC_0ef0a.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_0ef0a
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_bf303 && [1/2] Building C object CMakeFiles/cmTC_bf303.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_bf303
 
 
 
 Determining if the function fseeko exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_79ec9 && [1/2] Building C object CMakeFiles/cmTC_79ec9.dir/CheckFunctionExists.c.o
-[2/2] Linking C executable cmTC_79ec9
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_1e2b9 && [1/2] Building C object CMakeFiles/cmTC_1e2b9.dir/CheckFunctionExists.c.o
+[2/2] Linking C executable cmTC_1e2b9
 
 
 
 Performing C SOURCE FILE Test HAVE_BSWAP16 succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_9682a && [1/2] Building C object CMakeFiles/cmTC_9682a.dir/src.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_8eec2 && [1/2] Building C object CMakeFiles/cmTC_8eec2.dir/src.c.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.c:1:9: warning: a function declaration without a prototype is deprecated in all versions of C [-Wstrict-prototypes]
     1 | int main() { return __builtin_bswap16 (0) ; }
       |         ^
       |          void
 1 warning generated.
-[2/2] Linking C executable cmTC_9682a
+[2/2] Linking C executable cmTC_8eec2
 
 
 Source file was:
@@ -417,13 +417,13 @@ int main() { return __builtin_bswap16 (0) ; }
 Performing C SOURCE FILE Test HAVE_BSWAP32 succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_ebe94 && [1/2] Building C object CMakeFiles/cmTC_ebe94.dir/src.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_12d58 && [1/2] Building C object CMakeFiles/cmTC_12d58.dir/src.c.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.c:1:9: warning: a function declaration without a prototype is deprecated in all versions of C [-Wstrict-prototypes]
     1 | int main() { return __builtin_bswap32 (0) ; }
       |         ^
       |          void
 1 warning generated.
-[2/2] Linking C executable cmTC_ebe94
+[2/2] Linking C executable cmTC_12d58
 
 
 Source file was:
@@ -431,13 +431,13 @@ int main() { return __builtin_bswap32 (0) ; }
 Performing C SOURCE FILE Test HAVE_LANGINFO_CODESET succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_39bde && [1/2] Building C object CMakeFiles/cmTC_39bde.dir/src.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_a605f && [1/2] Building C object CMakeFiles/cmTC_a605f.dir/src.c.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.c:3:13: warning: a function declaration without a prototype is deprecated in all versions of C [-Wstrict-prototypes]
     3 |     int main()
       |             ^
       |              void
 1 warning generated.
-[2/2] Linking C executable cmTC_39bde
+[2/2] Linking C executable cmTC_a605f
 
 
 Source file was:
@@ -451,8 +451,8 @@ Source file was:
 Performing C SOURCE FILE Test HAVE_WERROR_FLAG succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_79f3c && [1/2] Building C object CMakeFiles/cmTC_79f3c.dir/src.c.o
-[2/2] Linking C executable cmTC_79f3c
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_bdc28 && [1/2] Building C object CMakeFiles/cmTC_bdc28.dir/src.c.o
+[2/2] Linking C executable cmTC_bdc28
 
 
 Source file was:
@@ -460,8 +460,8 @@ int main(void) { return 0; }
 Performing C SOURCE FILE Test HAVE_DECL_AFTER_STMT_FLAG succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_17bf0 && [1/2] Building C object CMakeFiles/cmTC_17bf0.dir/src.c.o
-[2/2] Linking C executable cmTC_17bf0
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_cd324 && [1/2] Building C object CMakeFiles/cmTC_cd324.dir/src.c.o
+[2/2] Linking C executable cmTC_cd324
 
 
 Source file was:
@@ -469,8 +469,8 @@ int main(void) { return 0; }
 Performing C SOURCE FILE Test HAVE_STACKREALIGN_FLAG succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_0b349 && [1/2] Building C object CMakeFiles/cmTC_0b349.dir/src.c.o
-[2/2] Linking C executable cmTC_0b349
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_c9cf4 && [1/2] Building C object CMakeFiles/cmTC_c9cf4.dir/src.c.o
+[2/2] Linking C executable cmTC_c9cf4
 
 
 Source file was:
@@ -478,8 +478,8 @@ int main(void) { return 0; }
 Performing C++ SOURCE FILE Test HAVE_WEFFCXX_FLAG succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_70133 && [1/2] Building CXX object CMakeFiles/cmTC_70133.dir/src.cxx.o
-[2/2] Linking CXX executable cmTC_70133
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_172e1 && [1/2] Building CXX object CMakeFiles/cmTC_172e1.dir/src.cxx.o
+[2/2] Linking CXX executable cmTC_172e1
 
 
 Source file was:
@@ -487,8 +487,8 @@ int main() { return 0; }
 Performing C SOURCE FILE Test HAVE_STACK_PROTECTOR_FLAG succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_ae287 && [1/2] Building C object CMakeFiles/cmTC_ae287.dir/src.c.o
-[2/2] Linking C executable cmTC_ae287
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_a8324 && [1/2] Building C object CMakeFiles/cmTC_a8324.dir/src.c.o
+[2/2] Linking C executable cmTC_a8324
 
 
 Source file was:
@@ -496,23 +496,23 @@ int main(void) { return 0; }
 Determining if the include file pthread.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_65521 && [1/2] Building C object CMakeFiles/cmTC_65521.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_65521
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_1551c && [1/2] Building C object CMakeFiles/cmTC_1551c.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_1551c
 
 
 
 Determining if the include file sys/param.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_4d879 && [1/2] Building C object CMakeFiles/cmTC_4d879.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_4d879
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_73d32 && [1/2] Building C object CMakeFiles/cmTC_73d32.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_73d32
 
 
 
 Determining if the function lround exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_fdd7f && [1/2] Building C object CMakeFiles/cmTC_fdd7f.dir/CheckFunctionExists.c.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_4cfff && [1/2] Building C object CMakeFiles/cmTC_4cfff.dir/CheckFunctionExists.c.o
 C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckFunctionExists.c:7:3: warning: incompatible redeclaration of library function 'lround' [-Wincompatible-library-redeclaration]
     7 |   CHECK_FUNCTION_EXISTS(void);
       |   ^
@@ -524,15 +524,15 @@ C:/PPProgam/android_sdk/cmake/3.22.1/share/cmake-3.22/Modules/CheckFunctionExist
     3 | #define CHECK_FUNCTION_EXISTS lround
       |                               ^
 1 warning generated.
-[2/2] Linking C executable cmTC_fdd7f
+[2/2] Linking C executable cmTC_4cfff
 
 
 
 Performing C SOURCE FILE Test HAVE_ASSOC_MATH succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_3cacc && [1/2] Building C object CMakeFiles/cmTC_3cacc.dir/src.c.o
-[2/2] Linking C executable cmTC_3cacc
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_d57c2 && [1/2] Building C object CMakeFiles/cmTC_d57c2.dir/src.c.o
+[2/2] Linking C executable cmTC_d57c2
 
 
 Source file was:
@@ -540,16 +540,16 @@ int main(void) { return 0; }
 Determining if the include file string.h exists passed with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_d05cf && [1/2] Building C object CMakeFiles/cmTC_d05cf.dir/CheckIncludeFile.c.o
-[2/2] Linking C executable cmTC_d05cf
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_4bbd0 && [1/2] Building C object CMakeFiles/cmTC_4bbd0.dir/CheckIncludeFile.c.o
+[2/2] Linking C executable cmTC_4bbd0
 
 
 
 Performing C++ SOURCE FILE Test COMPILER_HAS_HIDDEN_VISIBILITY succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_27520 && [1/2] Building CXX object CMakeFiles/cmTC_27520.dir/src.cxx.o
-[2/2] Linking CXX executable cmTC_27520
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_0c804 && [1/2] Building CXX object CMakeFiles/cmTC_0c804.dir/src.cxx.o
+[2/2] Linking CXX executable cmTC_0c804
 
 
 Source file was:
@@ -557,8 +557,8 @@ int main() { return 0; }
 Performing C++ SOURCE FILE Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_890a9 && [1/2] Building CXX object CMakeFiles/cmTC_890a9.dir/src.cxx.o
-[2/2] Linking CXX executable cmTC_890a9
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_abd64 && [1/2] Building CXX object CMakeFiles/cmTC_abd64.dir/src.cxx.o
+[2/2] Linking CXX executable cmTC_abd64
 
 
 Source file was:
@@ -566,7 +566,7 @@ int main() { return 0; }
 Performing C++ SOURCE FILE Test COMPILER_HAS_DEPRECATED_ATTR succeeded with the following output:
 Change Dir: C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp
 
-Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_02e4c && [1/2] Building CXX object CMakeFiles/cmTC_02e4c.dir/src.cxx.o
+Run Build Command(s):C:\PPProgam\android_sdk\cmake\3.22.1\bin\ninja.exe cmTC_c97db && [1/2] Building CXX object CMakeFiles/cmTC_c97db.dir/src.cxx.o
 C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1r1v1h/arm64-v8a/CMakeFiles/CMakeTmp/src.cxx:2:25: warning: 'somefunc' is deprecated [-Wdeprecated-declarations]
     2 |     int main() { return somefunc();}
       |                         ^
@@ -574,7 +574,7 @@ C:/Users/incxiuefb/Documents/Files/clone/camera_without_blood/app/.cxx/Debug/3c1
     1 | __attribute__((__deprecated__)) int somefunc() { return 0; }
       |                ^
 1 warning generated.
-[2/2] Linking CXX executable cmTC_02e4c
+[2/2] Linking CXX executable cmTC_c97db
 
 
 Source file was:

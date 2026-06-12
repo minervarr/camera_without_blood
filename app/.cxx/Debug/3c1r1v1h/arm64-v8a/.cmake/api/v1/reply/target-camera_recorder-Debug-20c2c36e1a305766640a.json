@@ -340,12 +340,12 @@
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "usb1::@6890427a1f51a3e7e1df"
-		},
-		{
 			"backtrace" : 3,
 			"id" : "compile_shaders::@6890427a1f51a3e7e1df"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "usb1::@6890427a1f51a3e7e1df"
 		},
 		{
 			"backtrace" : 2,

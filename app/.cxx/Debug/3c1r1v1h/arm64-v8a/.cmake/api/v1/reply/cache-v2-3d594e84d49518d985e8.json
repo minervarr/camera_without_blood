@@ -1655,11 +1655,11 @@
 			[
 				{
 					"name" : "HELPSTRING",
-					"value" : "No help, variable specified on the command line."
+					"value" : "The CMake toolchain file"
 				}
 			],
-			"type" : "UNINITIALIZED",
-			"value" : "C:\\PPProgam\\android_sdk\\ndk\\29.0.14206865\\build\\cmake\\android.toolchain.cmake"
+			"type" : "FILEPATH",
+			"value" : "C:/PPProgam/android_sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake"
 		},
 		{
 			"name" : "CMAKE_VERBOSE_MAKEFILE",
