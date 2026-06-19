@@ -3,6 +3,8 @@
 
 #include <FLAC/stream_encoder.h>
 #include <aaudio/AAudio.h>
+#include <android/asset_manager.h>
+#include "df_net.hh"
 
 #include "logger.hh"
 #include <algorithm>
@@ -15,8 +17,16 @@
 
 namespace aud {
 
-// Samples per FLAC frame — 4096 is a good balance of latency vs overhead
-static constexpr int FRAME_SAMPLES = 4096;
+// Samples per FLAC frame — 3840 is a good balance of latency vs overhead.
+// It is exactly 8 chunks of 480 samples, required by RNNoise.
+static constexpr int FRAME_SAMPLES = 3840;
+
+// Audio input-latency compensation. The first buffer the app reads holds sound
+// captured ~one input buffer earlier (ADC + USB/driver buffering), so anchoring
+// to monotonic_ns() at first read stamps audio LATER than the real acoustic
+// event — picture leads sound. Advance the anchor by this to realign. Calibrate
+// per device: raise it if sound still trails the picture, lower it if it leads.
+static constexpr int64_t kInputLatencyNs = 50'000'000;  // 50 ms
 
 // CLOCK_MONOTONIC nanoseconds (== std::chrono::steady_clock on Android). This is
 // the domain the video encoder PTS actually lands in on this pipeline: although the
@@ -28,8 +38,8 @@ static int64_t monotonic_ns() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-AudioCapture::AudioCapture()  = default;
-AudioCapture::~AudioCapture() { close(); }
+
+AudioCapture::~AudioCapture() { close(); stop_ai_recording(); }
 
 bool AudioCapture::open(const AudioConfig& cfg) {
     cfg_ = cfg;
@@ -138,37 +148,66 @@ bool AudioCapture::start(FlacFrameCallback cb) {
     anchored_        = false;
     audio_base_ns_   = 0;
 
-    // ── Configure FLAC encoder ─────────────────────────────────────────────────
-    encoder_ = FLAC__stream_encoder_new();
-    if (!encoder_) { LOGE("FLAC__stream_encoder_new failed"); return false; }
-
-    FLAC__stream_encoder_set_channels(encoder_, cfg_.channels);
-    FLAC__stream_encoder_set_bits_per_sample(encoder_, cfg_.bit_depth);
-    FLAC__stream_encoder_set_sample_rate(encoder_, cfg_.sample_rate);
-    FLAC__stream_encoder_set_compression_level(encoder_, 5); // 0=fast … 8=best
-    FLAC__stream_encoder_set_blocksize(encoder_, FRAME_SAMPLES);
-    FLAC__stream_encoder_set_streamable_subset(encoder_, true);
-
-    auto status = FLAC__stream_encoder_init_stream(
-        encoder_,
-        on_flac_write,
-        nullptr,  // seek  — streaming, no seek needed
-        nullptr,  // tell
-        nullptr,  // metadata
-        this
-    );
-    if (status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
-        LOGE("FLAC encoder init failed: %d", status);
-        FLAC__stream_encoder_delete(encoder_);
-        encoder_ = nullptr;
+    // ── Configure + init the FLAC encoder ───────────────────────────────────────
+    // Guard a degenerate negotiated format (e.g. a USB capture alt configureCapture
+    // couldn't actually set, leaving rate/bits at 0). A 0 rate would also
+    // divide-by-zero in capture_loop's timestamp, and 0 bits fails init outright.
+    if (cfg_.sample_rate <= 0 || cfg_.channels < 1 || cfg_.channels > 8 ||
+        cfg_.bit_depth < 4 || cfg_.bit_depth > 32) {
+        LOGE("Refusing audio: bad format rate=%d ch=%d bits=%d",
+             cfg_.sample_rate, cfg_.channels, cfg_.bit_depth);
         return false;
     }
 
+    // (Re)create + init the encoder. streamable_subset=true gives the most
+    // compatible stream, but its subset forbids sample rates >= 655360 Hz — which
+    // high-end USB DACs (705.6/768 kHz) advertise and we negotiate as "max
+    // everything". On any subset rejection, retry with the subset off: the stream
+    // stays valid + lossless (FLAC handles up to 1048575 Hz / 32-bit), just outside
+    // the "every decoder must handle this" subset. Without this the init fails,
+    // codec_private() stays empty, and the muxer drops the whole audio track (no
+    // .mkv audio, hence no AI side-car).
+    header_buf_.clear();
+    auto init_encoder = [&](bool subset) -> FLAC__StreamEncoderInitStatus {
+        encoder_ = FLAC__stream_encoder_new();
+        if (!encoder_) return FLAC__STREAM_ENCODER_INIT_STATUS_ENCODER_ERROR;
+        FLAC__stream_encoder_set_channels(encoder_, cfg_.channels);
+        FLAC__stream_encoder_set_bits_per_sample(encoder_, cfg_.bit_depth);
+        FLAC__stream_encoder_set_sample_rate(encoder_, cfg_.sample_rate);
+        FLAC__stream_encoder_set_compression_level(encoder_, 5); // 0=fast … 8=best
+        FLAC__stream_encoder_set_blocksize(encoder_, FRAME_SAMPLES);
+        FLAC__stream_encoder_set_streamable_subset(encoder_, subset);
+        return FLAC__stream_encoder_init_stream(
+            encoder_, on_flac_write,
+            nullptr, nullptr, nullptr,  // seek/tell/metadata — streaming, none needed
+            this);
+    };
+
+    bool subset = true;
+    auto status = init_encoder(/*subset=*/true);
+    if (status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+        if (encoder_) { FLAC__stream_encoder_delete(encoder_); encoder_ = nullptr; }
+        header_buf_.clear();
+        subset = false;
+        status = init_encoder(/*subset=*/false);
+    }
+    if (status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+        LOGE("FLAC encoder init failed (rate=%d ch=%d bits=%d): status %d",
+             cfg_.sample_rate, cfg_.channels, cfg_.bit_depth, status);
+        if (encoder_) { FLAC__stream_encoder_delete(encoder_); encoder_ = nullptr; }
+        return false;
+    }
+    LOGI("FLAC encoder ready: %dHz %dch %dbit (%s)",
+         cfg_.sample_rate, cfg_.channels, cfg_.bit_depth,
+         subset ? "subset" : "non-subset");
+
     capturing_ = true;
+    soxr_in_buf_.resize(FRAME_SAMPLES * cfg_.channels);
+    
     if (use_internal_ && aaudio_stream_)
         AAudioStream_requestStart(static_cast<AAudioStream*>(aaudio_stream_));
     else if (driver_) driver_->startCapture();
-    std::thread([this]{ capture_loop(); }).detach();
+    capture_thread_ = std::thread([this]{ capture_loop(); });
     LOGI("Audio capture + FLAC encoding started");
     return true;
 }
@@ -179,8 +218,176 @@ void AudioCapture::stop() {
     if (use_internal_ && aaudio_stream_)
         AAudioStream_requestStop(static_cast<AAudioStream*>(aaudio_stream_));
     else if (driver_) driver_->stopCapture();
+    
+    if (capture_thread_.joinable()) capture_thread_.join();
+
+    // The denoise runs later in finalize_denoise() (heavy, off the UI thread); the
+    // capture buffer in df_buf_ is complete now that the capture thread has joined.
     if (encoder_) FLAC__stream_encoder_finish(encoder_);
     LOGI("Audio capture stopped");
+}
+
+bool AudioCapture::start_ai_recording(const std::string& path, ::AAssetManager* assets) {
+    std::lock_guard<std::mutex> lock(ai_mutex_);
+    if (df_) return true;
+
+    // Load DeepFilterNet (enc/erb_dec/df_dec). If the model is unavailable the
+    // recording proceeds without the denoise side-car (the .mkv clean track is
+    // unaffected). The FLAC encoders are created later, in finalize.
+    df_ = std::make_unique<DfNet>();
+    if (!df_->init(assets)) {
+        LOGE("DeepFilterNet model load failed — no denoise side-car this clip");
+        df_.reset();
+        return false;
+    }
+
+    // Resampler: native capture rate -> 48 kHz (DeepFilterNet's fixed rate).
+    soxr_error_t err;
+    soxr_io_spec_t io_spec = soxr_io_spec(SOXR_FLOAT32_I, SOXR_FLOAT32_I);
+    soxr_quality_spec_t q_spec = soxr_quality_spec(SOXR_HQ, 0);
+    soxr_ = soxr_create(cfg_.sample_rate, 48000, cfg_.channels, &err, &io_spec, &q_spec, nullptr);
+    if (err) {
+        LOGE("SoX Resampler init failed: %s", soxr_strerror(err));
+        df_.reset();
+        return false;
+    }
+
+    // Per-block resample scratch (soxr_in_buf_ is pre-sized in start()), and the
+    // whole-clip 48 kHz capture buffer the model runs over at finalize.
+    size_t max_out_samples = static_cast<size_t>((FRAME_SAMPLES * 48000.0) / cfg_.sample_rate) + 100;
+    soxr_out_buf_.resize(max_out_samples * cfg_.channels);
+    df_buf_.assign(cfg_.channels, std::vector<float>());
+
+    // Derive the two A/B side-car paths from the .mkv output path.
+    auto derive = [&](const char* suffix) {
+        std::string p = path;
+        const std::string ext = ".mkv";
+        if (p.length() >= ext.length() &&
+            p.compare(p.length() - ext.length(), ext.length(), ext) == 0)
+            p = p.substr(0, p.length() - ext.length());
+        return p + suffix;
+    };
+    ai_path_ = derive("_ai.flac");   // DeepFilterNet + post-filter baked in
+
+    LOGI("AI denoise armed -> %s", ai_path_.c_str());
+    return true;
+}
+
+// Encode per-channel 48 kHz float audio to a standalone 24-bit FLAC. No gain or
+// normalization is applied — the denoised voice keeps its natural dynamic range.
+void AudioCapture::write_flac_file(const std::string& path,
+                                   const std::vector<std::vector<float>>& den, size_t n) {
+    const int ch = cfg_.channels;
+    FLAC__StreamEncoder* enc = FLAC__stream_encoder_new();
+    if (!enc) { LOGE("FLAC new failed: %s", path.c_str()); return; }
+    FLAC__stream_encoder_set_channels(enc, ch);
+    FLAC__stream_encoder_set_bits_per_sample(enc, 24);
+    FLAC__stream_encoder_set_sample_rate(enc, 48000);
+    FLAC__stream_encoder_set_compression_level(enc, 5);
+    FLAC__stream_encoder_set_blocksize(enc, 4096);
+
+    ai_file_ = std::fopen(path.c_str(), "w+b");
+    if (!ai_file_) {
+        LOGE("Failed to open AI file: %s (errno: %d)", path.c_str(), errno);
+        FLAC__stream_encoder_delete(enc);
+        return;
+    }
+
+    auto write_cb = [](const FLAC__StreamEncoder*, const FLAC__byte buffer[], size_t bytes, unsigned, unsigned, void* cd) -> FLAC__StreamEncoderWriteStatus {
+        auto* self = static_cast<AudioCapture*>(cd);
+        if (bytes > 0 && std::fwrite(buffer, 1, bytes, self->ai_file_) != bytes)
+            return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
+        return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
+    };
+    auto seek_cb = [](const FLAC__StreamEncoder*, FLAC__uint64 off, void* cd) -> FLAC__StreamEncoderSeekStatus {
+        auto* self = static_cast<AudioCapture*>(cd);
+        return std::fseek(self->ai_file_, static_cast<long>(off), SEEK_SET) == 0
+            ? FLAC__STREAM_ENCODER_SEEK_STATUS_OK : FLAC__STREAM_ENCODER_SEEK_STATUS_ERROR;
+    };
+    auto tell_cb = [](const FLAC__StreamEncoder*, FLAC__uint64* off, void* cd) -> FLAC__StreamEncoderTellStatus {
+        auto* self = static_cast<AudioCapture*>(cd);
+        long pos = std::ftell(self->ai_file_);
+        if (pos < 0) return FLAC__STREAM_ENCODER_TELL_STATUS_ERROR;
+        *off = static_cast<FLAC__uint64>(pos);
+        return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
+    };
+
+    if (FLAC__stream_encoder_init_stream(enc, write_cb, seek_cb, tell_cb, nullptr, this)
+            != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+        LOGE("FLAC AI encoder init failed: %s", path.c_str());
+        FLAC__stream_encoder_delete(enc);
+        std::fclose(ai_file_); ai_file_ = nullptr;
+        return;
+    }
+
+    constexpr size_t BLK = 4096;
+    std::vector<FLAC__int32> inter(BLK * ch);
+    for (size_t off = 0; off < n; off += BLK) {
+        const size_t m = std::min(BLK, n - off);
+        for (size_t i = 0; i < m; ++i)
+            for (int c = 0; c < ch; ++c) {
+                float v = std::clamp(den[c][off + i], -1.0f, 1.0f);
+                inter[i * ch + c] = static_cast<FLAC__int32>(v * 8388607.0f);
+            }
+        if (!FLAC__stream_encoder_process_interleaved(enc, inter.data(), static_cast<unsigned>(m)))
+            LOGE("AI FLAC process failed (%s): state %d", path.c_str(), FLAC__stream_encoder_get_state(enc));
+    }
+
+    FLAC__stream_encoder_finish(enc);
+    FLAC__stream_encoder_delete(enc);
+    std::fclose(ai_file_); ai_file_ = nullptr;
+    LOGI("AI denoise written: %zu samples/ch -> %s", n, path.c_str());
+}
+
+void AudioCapture::finalize_denoise() {
+    std::lock_guard<std::mutex> lock(ai_mutex_);
+    if (!df_ || df_buf_.empty()) { stop_ai_recording_locked(); return; }
+
+    const int ch = cfg_.channels;
+
+    // Drain any samples still held inside the resampler (flush with null input).
+    if (soxr_) {
+        size_t odone = 0;
+        do {
+            soxr_process(soxr_, nullptr, 0, nullptr,
+                         soxr_out_buf_.data(), soxr_out_buf_.size() / ch, &odone);
+            for (int c = 0; c < ch; ++c)
+                for (size_t i = 0; i < odone; ++i)
+                    df_buf_[c].push_back(soxr_out_buf_[i * ch + c]);
+        } while (odone > 0);
+    }
+
+    // DeepFilterNet + post-filter, per channel (mono model; stereo preserved).
+    std::vector<std::vector<float>> den(ch);
+    size_t n = df_buf_[0].size();
+    for (int c = 0; c < ch; ++c) {
+        den[c] = df_->process(df_buf_[c], /*post_filter=*/true);
+        if (den[c].size() != df_buf_[c].size()) { LOGE("denoise ch%d failed; using original", c); den[c] = df_buf_[c]; }
+        n = std::min(n, den[c].size());
+    }
+
+    write_flac_file(ai_path_, den, n);
+
+    stop_ai_recording_locked();
+}
+
+void AudioCapture::stop_ai_recording() {
+    std::lock_guard<std::mutex> lock(ai_mutex_);
+    stop_ai_recording_locked();
+}
+
+void AudioCapture::stop_ai_recording_locked() {
+    if (soxr_) {
+        soxr_delete(soxr_);
+        soxr_ = nullptr;
+    }
+    if (ai_file_) {   // safety net; write_flac_file closes it on the normal path
+        std::fclose(ai_file_);
+        ai_file_ = nullptr;
+    }
+    df_.reset();
+    df_buf_.clear();
+    df_buf_.shrink_to_fit();
 }
 
 void AudioCapture::capture_loop() {
@@ -226,7 +433,7 @@ void AudioCapture::capture_loop() {
 
         // Anchor the audio timeline to the first sample's capture instant, in the
         // same clock domain as the video encoder PTS (MONOTONIC), so A/V align.
-        if (!anchored_) { audio_base_ns_ = monotonic_ns(); anchored_ = true; }
+        if (!anchored_) { audio_base_ns_ = monotonic_ns() - kInputLatencyNs; anchored_ = true; }
 
         raw_filled += got;
 
@@ -243,29 +450,50 @@ void AudioCapture::capture_loop() {
 
         // Convert raw bytes → FLAC__int32 directly into the per-channel buffers.
         // USB audio PCM is LITTLE-ENDIAN, sign-extended to the sample's bit depth.
-        // (Reading it big-endian byte-reverses every sample → pure noise, the old bug.)
+        // Also convert to float for SoX (interleaved).
         const uint8_t* p = raw.data();
-        for (int s = 0; s < FRAME_SAMPLES; ++s) {
+        for (int i = 0; i < FRAME_SAMPLES; ++i) {
             for (int c = 0; c < cfg_.channels; ++c) {
-                int32_t v = 0;
-                if (bytes_per_sample == 4) {
-                    v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-                                  ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+                int32_t val = 0;
+                float fval = 0.0f;
+                if (bytes_per_sample == 2) {
+                    val = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+                    fval = val / 32768.0f;
                 } else if (bytes_per_sample == 3) {
                     uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
                     if (u & 0x00800000u) u |= 0xFF000000u;  // sign-extend 24-bit
-                    v = (int32_t)u;
-                } else if (bytes_per_sample == 2) {
-                    v = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+                    val = (int32_t)u;
+                    fval = val / 8388608.0f;
+                } else if (bytes_per_sample == 4) {
+                    val = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                                   ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+                    fval = val / 2147483648.0f;
                 }
-                channels[c][s] = v;
+                channels[c][i] = val;
+                
+                // Keep scaled float for SoX (Interleaved)
+                soxr_in_buf_[i * cfg_.channels + c] = fval;
                 p += bytes_per_sample;
             }
         }
 
         frame_buf_.clear();
         FLAC__stream_encoder_process(encoder_, ch_ptrs.data(), FRAME_SAMPLES);
-        // on_flac_write will fill frame_buf_ and trigger callback
+
+        // --- AI denoise capture: resample to 48 kHz and buffer the whole clip ---
+        // The DeepFilterNet inference is offline (the exported models need the full
+        // sequence), so here we only accumulate; finalize_denoise() runs the model.
+        {
+            std::lock_guard<std::mutex> lock(ai_mutex_);
+            if (soxr_ && !df_buf_.empty()) {
+                size_t idone, odone;
+                soxr_process(soxr_, soxr_in_buf_.data(), FRAME_SAMPLES, &idone,
+                             soxr_out_buf_.data(), soxr_out_buf_.size() / cfg_.channels, &odone);
+                for (int c = 0; c < cfg_.channels; ++c)
+                    for (size_t i = 0; i < odone; ++i)
+                        df_buf_[c].push_back(soxr_out_buf_[i * cfg_.channels + c]);
+            }
+        }
 
         if (callback_ && !frame_buf_.empty()) {
             callback_(frame_buf_.data(), (int)frame_buf_.size(), frame_ts_);

@@ -19,10 +19,12 @@ jmethodID  g_start_rec = nullptr;  // startRecording()
 jmethodID  g_stop_rec  = nullptr;  // stopRecording()
 jmethodID  g_take_photo = nullptr; // takePhoto(String)
 jmethodID  g_request_usb = nullptr; // requestUsbAccess()
+jmethodID  g_set_raw_mode = nullptr; // setRawVideoMode(boolean)
 int        g_usb_fd = 0;            // libusb fd from UsbManager (0 = none)
-PreviewSink g_sink{};
-RecordSink  g_record{};
-RawSink     g_raw{};
+PreviewSink  g_sink{};
+RecordSink   g_record{};
+RawSink      g_raw{};
+RawVideoSink g_raw_video{};
 
 // Gets a JNIEnv for the current thread, attaching if necessary. Sets *detach to
 // true if the caller must DetachCurrentThread afterwards.
@@ -55,11 +57,13 @@ jclass load_app_class(JNIEnv* env, jobject activity, const char* dotted_name) {
 
 } // namespace
 
-bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink record, RawSink raw) {
-    g_vm     = vm;
-    g_sink   = preview;
-    g_record = record;
-    g_raw    = raw;
+bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink record,
+              RawSink raw, RawVideoSink raw_video) {
+    g_vm        = vm;
+    g_sink      = preview;
+    g_record    = record;
+    g_raw       = raw;
+    g_raw_video = raw_video;
 
     bool detach = false;
     JNIEnv* env = env_for_thread(&detach);
@@ -81,8 +85,9 @@ bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink reco
                 g_stop_rec  = env->GetMethodID(cls, "stopRecording", "()V");
                 g_take_photo = env->GetMethodID(cls, "takePhoto", "(Ljava/lang/String;)V");
                 g_request_usb = env->GetMethodID(cls, "requestUsbAccess", "()V");
+                g_set_raw_mode = env->GetMethodID(cls, "setRawVideoMode", "(Z)V");
                 ok = (g_start && g_stop && g_release && g_start_rec && g_stop_rec &&
-                      g_take_photo && g_request_usb);
+                      g_take_photo && g_request_usb && g_set_raw_mode);
                 env->DeleteLocalRef(obj);
             }
         }
@@ -94,6 +99,16 @@ bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink reco
     if (ok) LOGI("HdrCameraSession created");
     else    LOGE("hdr_init failed");
     return ok;
+}
+
+void hdr_set_raw_video(bool enabled) {
+    if (!g_session) return;
+    bool detach = false;
+    JNIEnv* env = env_for_thread(&detach);
+    if (!env) return;
+    env->CallVoidMethod(g_session, g_set_raw_mode, enabled ? JNI_TRUE : JNI_FALSE);
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (detach) g_vm->DetachCurrentThread();
 }
 
 void hdr_start_preview() {
@@ -232,6 +247,30 @@ Java_io_nava_camera_HdrCameraSession_nativeOnRawFrame(
                       has_neutral ? neutral3 : nullptr,
                       has_black ? black4 : nullptr, white);
     env->ReleaseStringUTFChars(path, cpath);
+}
+
+// One streaming RAW16 video frame (raw video mode, while recording). `buf` is
+// a direct ByteBuffer over the Image's Bayer plane — valid only during this
+// call; the sink copies synchronously into its staging ring.
+extern "C" JNIEXPORT void JNICALL
+Java_io_nava_camera_HdrCameraSession_nativeOnRawVideoFrame(
+        JNIEnv* env, jclass, jobject buf, jint width, jint height,
+        jint stride, jlong ts_ns) {
+    if (!jni::g_raw_video.on_frame || !buf) return;
+    auto* data = static_cast<const uint8_t*>(env->GetDirectBufferAddress(buf));
+    if (!data) return;
+    jni::g_raw_video.on_frame(data, width, height, stride, static_cast<int64_t>(ts_ns));
+}
+
+// White balance reference for the current clip (AWB-locked neutral point).
+extern "C" JNIEXPORT void JNICALL
+Java_io_nava_camera_HdrCameraSession_nativeOnRawVideoNeutral(
+        JNIEnv* env, jclass, jfloatArray neutral) {
+    if (!jni::g_raw_video.on_neutral || !neutral) return;
+    if (env->GetArrayLength(neutral) < 3) return;
+    float n[3];
+    env->GetFloatArrayRegion(neutral, 0, 3, n);
+    jni::g_raw_video.on_neutral(n);
 }
 
 // USB DAC file descriptor from UsbManager (after permission grant). 0 clears it.

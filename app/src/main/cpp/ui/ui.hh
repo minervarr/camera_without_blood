@@ -18,16 +18,22 @@ public:
     enum class Action { NONE, TOGGLE_MODE, SHUTTER };
     Action on_touch(float x, float y);
     bool is_video_mode() const { return mode_ == Mode::VIDEO; }
+    // Restore the photo/video selection after the UI is rebuilt (surface recreate),
+    // so returning from the background mid-recording keeps the Stop button.
+    void set_video_mode(bool v) { mode_ = v ? Mode::VIDEO : Mode::PHOTO; }
 
 private:
     void draw_photo_mode(int device_orientation);
-    void draw_video_mode(int device_orientation, bool is_recording, int64_t duration_ms);
+    void draw_video_mode(int device_orientation, bool is_recording, int64_t duration_ms,
+                         bool finalizing, int finalize_pct);
 
     Canvas& canvas_;
     
     enum class Mode { PHOTO, VIDEO };
     Mode mode_ = Mode::PHOTO;
-    
+    // The RAW-pipeline denoise/demosaic A/B toggles were retired from the UI; the
+    // chosen defaults now live in the pipeline (HQ demosaic + chroma denoise on).
+
     struct Rect { float x, y, w, h; };
     Rect shutter_btn_ = {0, 0, 0, 0};
     Rect toggle_btn_ = {0, 0, 0, 0};

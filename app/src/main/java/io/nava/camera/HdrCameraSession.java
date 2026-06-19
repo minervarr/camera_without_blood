@@ -74,6 +74,10 @@ public class HdrCameraSession {
 
     private HandlerThread bgThread;
     private Handler bgHandler;
+    // Dedicated thread for the RAW reader so its per-frame 24MB staging copy
+    // doesn't jostle preview delivery (both used to share bgHandler).
+    private HandlerThread rawThread;
+    private Handler rawHandler;
 
     private CameraDevice device;
     private CameraCaptureSession session;
@@ -86,6 +90,11 @@ public class HdrCameraSession {
     private boolean hdrSupported;
 
     private int previewWidth, previewHeight;
+
+    // AE target frame-rate range, locked so auto-exposure can't lower the frame
+    // rate for brightness (which otherwise sags the camera below 30fps in dim
+    // light). Chosen at startPreview from the device's supported ranges.
+    private Range<Integer> aeFpsRange;
 
     // Recording
     private MediaCodec encoder;
@@ -102,12 +111,24 @@ public class HdrCameraSession {
     private int rawWidth, rawHeight;
     private CameraCharacteristics characteristics;
     private String photoBase;
+    // RAW frames the still-photo path still expects to acquire for the active
+    // burst. 0 = no burst → onRawImage discards stray frames (e.g. those that
+    // arrive in-flight just after recording stops) instead of leaking the
+    // ImageReader's buffers. Guarded by rawLock.
+    private int photoFramesWanted = 0;
     private final Object rawLock = new Object();
     private final HashMap<Long, Image> pendingImages = new HashMap<>();
     private final HashMap<Long, TotalCaptureResult> pendingResults = new HashMap<>();
     private final HashMap<Long, Integer> pendingIndex = new HashMap<>();
     private static final int BRACKET_COUNT = 3;
     private static final int MAX_VIDEO_WIDTH = 100000;  // effectively uncapped (max sensor res)
+
+    // RAW video mode: the session is preview + streaming RAW16 and recording
+    // delivers Bayer frames to the native ISP/encoder. No MediaCodec, no
+    // DynamicRangeProfiles — native owns the entire pipeline. Selected by
+    // native before startPreview.
+    private volatile boolean rawVideoMode;
+    private volatile boolean rawRecording;
 
     public HdrCameraSession(Context ctx, long nativeCtx) {
         this.nativeCtx = nativeCtx;
@@ -122,6 +143,9 @@ public class HdrCameraSession {
     private static native void nativeOnVideoPacket(long ctx, byte[] data, int size, long ptsUs, boolean keyframe);
     private static native void nativeOnRawFrame(long ctx, String path, ByteBuffer data,
             int width, int height, int rowStride, float[] neutral, float[] black, int white);
+    private static native void nativeOnRawVideoFrame(ByteBuffer data,
+            int width, int height, int rowStride, long timestampNs);
+    private static native void nativeOnRawVideoNeutral(float[] neutral);
     private static native void nativeOnUsbFd(int fd);
 
     // ── USB DAC permission + open ────────────────────────────────────────────
@@ -188,11 +212,25 @@ public class HdrCameraSession {
 
     // ── Control (called from native) ─────────────────────────────────────────
 
+    /** Must be called before startPreview. true = stream RAW16 to the native
+     *  ISP for video; false = legacy HLG10 MediaCodec path. */
+    public void setRawVideoMode(boolean enabled) {
+        rawVideoMode = enabled;
+        Log.i(TAG, "raw video mode: " + enabled);
+    }
+
     public synchronized void startPreview() {
+        // Bring up the foreground service FIRST (while we're still foreground), so
+        // Android keeps the camera legal once the app is backgrounded / screen off.
+        startCameraService();
         try {
             bgThread = new HandlerThread("HdrCamera");
             bgThread.start();
             bgHandler = new Handler(bgThread.getLooper());
+
+            rawThread = new HandlerThread("HdrCameraRaw");
+            rawThread.start();
+            rawHandler = new Handler(rawThread.getLooper());
 
             cameraId = pickBackCamera();
             if (cameraId == null) { Log.e(TAG, "No back camera"); return; }
@@ -234,10 +272,37 @@ public class HdrCameraSession {
                     if ((long) s.getWidth() * s.getHeight() > (long) best.getWidth() * best.getHeight()) best = s;
                 rawWidth = best.getWidth();
                 rawHeight = best.getHeight();
-                rawReader = ImageReader.newInstance(rawWidth, rawHeight, ImageFormat.RAW_SENSOR, BRACKET_COUNT + 1);
-                rawReader.setOnImageAvailableListener(this::onRawImage, bgHandler);
-                Log.i(TAG, "RAW reader " + rawWidth + "x" + rawHeight);
+                // Streaming video needs more in-flight buffers than a still burst.
+                int maxImages = rawVideoMode ? 6 : BRACKET_COUNT + 1;
+                rawReader = ImageReader.newInstance(rawWidth, rawHeight, ImageFormat.RAW_SENSOR, maxImages);
+                rawReader.setOnImageAvailableListener(this::onRawImage, rawHandler);
+                Log.i(TAG, "RAW reader " + rawWidth + "x" + rawHeight + " (max " + maxImages + ")");
+                // Diagnostic: the hardware ceiling for full-res RAW. If this is
+                // < 30, no AE lock can reach 30fps and we'd need a smaller RAW.
+                long minDur = scm.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, best);
+                Log.i(TAG, String.format("RAW max fps (hw): %.1f  (min frame duration %.2f ms)",
+                           minDur > 0 ? 1e9 / minDur : 0.0, minDur / 1e6));
+                // Diagnostic: enumerate EVERY RAW mode + its readout ceiling, to
+                // see whether any smaller/binned RAW beats 33.3 ms (i.e. whether
+                // 4K60 RAW is even physically possible — full-res is 30fps-locked).
+                for (Size s : rawSizes) {
+                    long d = scm.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, s);
+                    Log.i(TAG, String.format("  RAW mode %dx%d  minDur %.2f ms -> %.1f fps max",
+                               s.getWidth(), s.getHeight(), d / 1e6, d > 0 ? 1e9 / d : 0.0));
+                }
+                // High-speed (CONSTRAINED_HIGH_SPEED) is a YUV path, not RAW, but
+                // shows whether any high-fps capture exists on this sensor at all.
+                try {
+                    for (Size s : scm.getHighSpeedVideoSizes())
+                        Log.i(TAG, "  high-speed YUV " + s + " fps " +
+                               java.util.Arrays.toString(scm.getHighSpeedVideoFpsRangesFor(s)));
+                } catch (Exception e) { Log.i(TAG, "  high-speed: none (" + e + ")"); }
             }
+
+            // Lock AE to a 30fps-capable range so exposure can't float the frame
+            // rate down. Prefer fixed [30,30]; else highest fixed; else widest.
+            aeFpsRange = pickAeFpsRange(characteristics);
+            Log.i(TAG, "AE target fps range: " + aeFpsRange);
 
             // Create the persistent encoder surface once. It is added to the camera
             // session permanently so recording start/stop never needs recreateSession().
@@ -245,10 +310,14 @@ public class HdrCameraSession {
             // is configured on it — and the camera session can't be configured with an
             // unsized surface. So configure the encoder now (Configured state, not
             // started) to size the surface before openCamera builds the session.
-            if (persistentInputSurface == null) {
-                persistentInputSurface = MediaCodec.createPersistentInputSurface();
+            // RAW video mode needs none of this: the session is preview + RAW16
+            // and the native ISP/encoder consumes the Bayer frames directly.
+            if (!rawVideoMode) {
+                if (persistentInputSurface == null) {
+                    persistentInputSurface = MediaCodec.createPersistentInputSurface();
+                }
+                if (encoder == null) configureEncoder();
             }
-            if (encoder == null) configureEncoder();
 
             manager.openCamera(cameraId, deviceCallback, bgHandler);
             Log.i(TAG, "startPreview  " + previewWidth + "x" + previewHeight
@@ -273,12 +342,36 @@ public class HdrCameraSession {
             Log.e(TAG, "stopPreview", e);
         } finally {
             if (bgThread != null) { bgThread.quitSafely(); bgThread = null; bgHandler = null; }
+            if (rawThread != null) { rawThread.quitSafely(); rawThread = null; rawHandler = null; }
             if (usbReceiver != null) {
                 try { appCtx.unregisterReceiver(usbReceiver); } catch (Exception ignored) {}
                 usbReceiver = null;
             }
             if (usbConn != null) { try { usbConn.close(); } catch (Exception ignored) {} usbConn = null; }
             nativeOnUsbFd(0);
+            stopCameraService();   // camera fully closed — drop the foreground service + wake lock
+        }
+    }
+
+    // ── Foreground service control (keeps the camera alive in the background) ──
+    private void startCameraService() {
+        try {
+            Intent i = new Intent(appCtx, RecordingService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appCtx.startForegroundService(i);
+            } else {
+                appCtx.startService(i);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "startCameraService", e);
+        }
+    }
+
+    private void stopCameraService() {
+        try {
+            appCtx.stopService(new Intent(appCtx, RecordingService.class));
+        } catch (Exception e) {
+            Log.e(TAG, "stopCameraService", e);
         }
     }
 
@@ -348,9 +441,10 @@ public class HdrCameraSession {
                         MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10);
                 fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020);
                 fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_HLG);
-                // Full range (0-1023) preserves more headroom than broadcast limited
-                // (64-940). May not be honored for HLG; log and let encoder decide.
-                fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL);
+                // Limited range: must match the muxer's BROADCAST_RANGE tag —
+                // a full-range bitstream under a limited-range container tag is
+                // what made Samsung's player reject the files.
+                fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
             }
             encoder.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             // Bind to the persistent surface; this is what gives the surface its
@@ -371,6 +465,23 @@ public class HdrCameraSession {
 
     public synchronized void startRecording() {
         if (recording || device == null) return;
+        if (rawVideoMode) {
+            // No encoder here: just add the RAW stream to the repeating request
+            // (no session rebuild) and lock AWB so white balance can't pump
+            // mid-clip. Frames flow to native via onRawImage.
+            if (rawReader == null || session == null) {
+                Log.e(TAG, "startRecording: RAW stream unavailable");
+                return;
+            }
+            // Free any RAW buffers a prior still burst might still hold, so the
+            // streaming path starts with the reader's full slot count.
+            synchronized (rawLock) { flushPendingStills(); }
+            rawRecording = true;
+            recording = true;
+            startRepeating(true);
+            Log.i(TAG, "startRecording (raw video -> native ISP)");
+            return;
+        }
         sentFormat = false;
         try {
             // Encoder is normally already configured (from startPreview, or the
@@ -395,6 +506,13 @@ public class HdrCameraSession {
 
     public synchronized void stopRecording() {
         if (!recording) return;
+        if (rawVideoMode) {
+            recording = false;
+            rawRecording = false;
+            startRepeating(false);   // back to preview-only
+            Log.i(TAG, "stopRecording (raw video)");
+            return;
+        }
         recording = false;
         // Stop the camera feeding the encoder surface first (drop it from the
         // repeating request), so no frames arrive after we signal end-of-stream.
@@ -489,11 +607,15 @@ public class HdrCameraSession {
     public synchronized void takePhoto(String basePath) {
         // RAW is not in the session while the (10-bit) encoder stream is registered
         // — preview + 10-bit encode + RAW is not a guaranteed stream combination.
-        if (rawReader == null || session == null || device == null || inputSurfaceSized) {
-            Log.e(TAG, "takePhoto: RAW capture unavailable (encoder stream active)");
+        if (rawReader == null || session == null || device == null || inputSurfaceSized
+                || rawRecording) {
+            Log.e(TAG, "takePhoto: RAW capture unavailable (video stream active)");
             return;
         }
         photoBase = basePath;
+        // Arm the still path to accept exactly this burst's frames (and clear any
+        // stale state from a previous, possibly-incomplete burst).
+        synchronized (rawLock) { flushPendingStills(); photoFramesWanted = BRACKET_COUNT; }
         try {
             // Exposure-compensation steps for -2 / 0 / +2 EV, clamped to range.
             Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
@@ -522,6 +644,25 @@ public class HdrCameraSession {
         }
     }
 
+    // Repeating-request callback in raw video mode (preview AND record): feeds
+    // the latest neutral point (white balance reference) to the native ISP,
+    // throttled. Running during preview means the ISP already has a valid WB
+    // before recording starts — no green/blue first frame, no warm→cold jump.
+    // During record AWB is locked, so this just re-reports the same stable value.
+    private int rawNeutralCounter;
+    private final CameraCaptureSession.CaptureCallback rawVideoCaptureCallback =
+            new CameraCaptureSession.CaptureCallback() {
+        @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request,
+                                                 TotalCaptureResult result) {
+            // ~ every 15th frame is plenty for a slowly-drifting white balance.
+            if ((rawNeutralCounter++ % 15) != 0) return;
+            Rational[] n = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT);
+            if (n == null || n.length < 3) return;
+            nativeOnRawVideoNeutral(new float[]{
+                    n[0].floatValue(), n[1].floatValue(), n[2].floatValue() });
+        }
+    };
+
     private final CameraCaptureSession.CaptureCallback captureCallback =
             new CameraCaptureSession.CaptureCallback() {
         @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request,
@@ -538,13 +679,45 @@ public class HdrCameraSession {
     };
 
     private void onRawImage(ImageReader reader) {
+        if (rawRecording) {
+            // Streaming video: hand each Bayer frame to the native ISP. The native
+            // side copies it synchronously into the GPU input ring, so the Image
+            // is closed before the next acquire — slots never pile up.
+            Image img;
+            while ((img = reader.acquireNextImage()) != null) {
+                try {
+                    Image.Plane plane = img.getPlanes()[0];
+                    nativeOnRawVideoFrame(plane.getBuffer(), img.getWidth(),
+                            img.getHeight(), plane.getRowStride(), img.getTimestamp());
+                } finally {
+                    img.close();
+                }
+            }
+            return;
+        }
         Image img = reader.acquireNextImage();
         if (img == null) return;
-        long ts = img.getTimestamp();
         synchronized (rawLock) {
+            // Only hold frames for an active bracketed-still burst. Anything else
+            // (e.g. frames still in flight right after stopRecording flips
+            // rawRecording false) is a stray we must close, or it leaks the
+            // reader's buffers and the next recording crashes on acquire.
+            if (photoFramesWanted <= 0) { img.close(); return; }
+            photoFramesWanted--;
+            long ts = img.getTimestamp();
             pendingImages.put(ts, img);
             tryEmit(ts);
         }
+    }
+
+    // Closes any images still held for a (failed/abandoned) still burst and
+    // resets the pairing maps. Call under rawLock before reusing the RAW reader.
+    private void flushPendingStills() {
+        for (Image i : pendingImages.values()) { try { i.close(); } catch (Exception ignored) {} }
+        pendingImages.clear();
+        pendingResults.clear();
+        pendingIndex.clear();
+        photoFramesWanted = 0;
     }
 
     // Pairs a RAW image with its capture result (by sensor timestamp) and emits
@@ -645,15 +818,40 @@ public class HdrCameraSession {
         try {
             int template = withEncoder ? CameraDevice.TEMPLATE_RECORD : CameraDevice.TEMPLATE_PREVIEW;
             CaptureRequest.Builder b = device.createCaptureRequest(template);
-            b.addTarget(previewReader.getSurface());
-            if (withEncoder && persistentInputSurface != null) b.addTarget(persistentInputSurface);
+            // While RAW recording, capture ONLY the RAW stream — drop the preview
+            // target. No preview frames means the renderer goes idle (no swapchain
+            // present / compositor hold), so the native ISP compute owns the whole
+            // GPU instead of being periodically stalled ~90ms by the present. The
+            // on-screen preview freezes during recording (intended).
+            boolean rawRecord = withEncoder && rawVideoMode && rawReader != null;
+            if (!rawRecord) b.addTarget(previewReader.getSurface());
+            if (withEncoder) {
+                if (rawRecord) {
+                    b.addTarget(rawReader.getSurface());
+                    // One white balance per clip: lock AWB and report the locked
+                    // neutral to the native ISP (rawVideoCaptureCallback below).
+                    b.set(CaptureRequest.CONTROL_AWB_LOCK, true);
+                } else if (persistentInputSurface != null) {
+                    b.addTarget(persistentInputSurface);
+                }
+            }
             // Disable video (electronic) stabilization. TEMPLATE_RECORD turns EIS
             // on; its gyro/frame timestamp sync hiccups ~1Hz and stalls the camera
             // pipeline → the once-per-second preview micro-stop while recording.
             b.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                   CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF);
-            session.setRepeatingRequest(b.build(), null, bgHandler);
-            Log.i(TAG, "repeating request (encoder=" + withEncoder + ")");
+            // Pin the frame rate so AE raises gain (not exposure time) in dim
+            // light — without this the camera delivers < 30fps regardless of how
+            // fast the ISP/encoder run.
+            if (aeFpsRange != null)
+                b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, aeFpsRange);
+            // In raw mode, keep the neutral callback on BOTH preview and record
+            // so the native ISP has a valid white balance from frame 0.
+            CameraCaptureSession.CaptureCallback cb =
+                    rawVideoMode ? rawVideoCaptureCallback : null;
+            session.setRepeatingRequest(b.build(), cb, bgHandler);
+            Log.i(TAG, "repeating request (encoder=" + withEncoder
+                       + " raw=" + rawVideoMode + ")");
         } catch (CameraAccessException | IllegalStateException e) {
             // Device/session may have been torn down by a concurrent pause/resume.
             Log.e(TAG, "repeating (ignored, session torn down): " + e.getMessage());
@@ -664,6 +862,23 @@ public class HdrCameraSession {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
         DynamicRangeProfiles p = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES);
         return p != null && p.getSupportedProfiles().contains(DynamicRangeProfiles.HLG10);
+    }
+
+    // Best AE target fps range for steady 30fps: prefer one whose upper bound is
+    // 30 (so AE tops out at 30 and, when light allows, holds it); among those the
+    // highest lower bound (least room to sag). Falls back to the highest upper
+    // bound, then to [30,30] if the device reports nothing.
+    private Range<Integer> pickAeFpsRange(CameraCharacteristics chars) {
+        Range<Integer>[] ranges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+        if (ranges == null || ranges.length == 0) return new Range<>(30, 30);
+        Range<Integer> best = ranges[0];
+        for (Range<Integer> r : ranges) {
+            boolean b30 = best.getUpper() == 30, r30 = r.getUpper() == 30;
+            if (b30 != r30)        best = r30 ? r : best;
+            else if (b30)          best = r.getLower() > best.getLower() ? r : best;
+            else                   best = r.getUpper() > best.getUpper() ? r : best;
+        }
+        return best;
     }
 
     private String pickBackCamera() throws CameraAccessException {

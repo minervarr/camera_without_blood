@@ -23,6 +23,31 @@ set(FT_DISABLE_HARFBUZZ  ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_BROTLI    ON CACHE BOOL "" FORCE)
 add_subdirectory(${FONT_DIR}/freetype ${CMAKE_BINARY_DIR}/freetype)
 
+# --- KissFFT ---
+add_library(kiss_fft STATIC
+    ${LIBS_DIR}/kiss_fft/kiss_fft.c
+    ${LIBS_DIR}/kiss_fft/kiss_fftr.c
+)
+target_include_directories(kiss_fft PUBLIC ${LIBS_DIR}/kiss_fft)
+target_compile_definitions(kiss_fft PRIVATE FLOATING_POINT USE_KISS_FFT EXPORT=)
+target_compile_options(kiss_fft PRIVATE -Wno-unused-parameter -Wno-sign-compare)
+
+# --- SoxR ---
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${LIBS_DIR}/soxr ${CMAKE_BINARY_DIR}/soxr)
+target_include_directories(soxr PUBLIC ${LIBS_DIR}/soxr/src)
+
+# --- ONNX Runtime ---
+set(ONNXRUNTIME_DIR ${LIBS_DIR}/onnxruntime)
+add_library(onnxruntime SHARED IMPORTED)
+set_target_properties(onnxruntime PROPERTIES IMPORTED_LOCATION
+    ${ONNXRUNTIME_DIR}/lib/${ANDROID_ABI}/libonnxruntime.so
+)
+target_include_directories(onnxruntime INTERFACE ${ONNXRUNTIME_DIR}/include)
+
 # ── libusb (from audio_engine submodule) ──────────────────────────────────────
 set(LIBUSB_DIR ${AUDIO_DIR}/libusb)
 add_library(usb1 STATIC
@@ -64,6 +89,13 @@ add_library(EBML::ebml ALIAS ebml)
 set(CMAKE_DISABLE_FIND_PACKAGE_EBML ON)
 add_subdirectory(${LIBS_DIR}/libmatroska ${CMAKE_BINARY_DIR}/libmatroska)
 
+#  NCNN 
+set(NCNN_VULKAN ON CACHE BOOL "" FORCE)
+set(NCNN_DISABLE_EXCEPTION OFF CACHE BOOL "" FORCE)
+set(NCNN_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
+set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
+add_subdirectory(${LIBS_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
+
 # ── Shader compilation (slangc required from Vulkan SDK) ──────────────────────
 set(SLANGC         "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe")
 set(SHADER_SRC_DIR ${FONT_DIR}/shaders_src)
@@ -97,6 +129,12 @@ add_library(camera_recorder SHARED
     camera/dng_writer.cc
     camera/dng_meta_source.cc
 
+    # ISP (Video Pipeline)
+    isp/ai_denoiser.cc
+    isp/frame_store.cc
+    isp/raw_video_pipeline.cc
+    isp/vk_compute.cc
+
     # JNI bridge to the Java HDR camera session
     jni/jni_camera.cc
 
@@ -105,6 +143,9 @@ add_library(camera_recorder SHARED
 
     # Audio capture (DAC/USB)
     audio/audio_capture.cc
+
+    # AI audio denoise (DeepFilterNet 3, ONNX Runtime, offline at finalize)
+    audio/df_net.cc
 
     # MKV muxer wrapper
     muxer/muxer.cc
@@ -132,7 +173,7 @@ add_library(camera_recorder SHARED
     ${AUDIO_DIR}/usb_audio.cpp
 
     # archive_engine native sources
-    ${ARCHIVE_DIR}/archive.cc
+    archive.cc
 
     # NDK native app glue
     ${NATIVE_GLUE}/android_native_app_glue.c
@@ -148,21 +189,29 @@ target_include_directories(camera_recorder PRIVATE
     ${FONT_DIR}/freetype/include
     ${AUDIO_DIR}
     ${LIBUSB_DIR}/libusb
-    ${ARCHIVE_DIR}
+    ${ARCHIVE_DIR}/archive/include
+    ${ARCHIVE_DIR}/util/include
     ${NATIVE_GLUE}
     ${LIBS_DIR}/libebml
     ${LIBS_DIR}/libmatroska
     ${LIBS_DIR}/flac/include
+    ${LIBS_DIR}/ncnn/src
 )
 
 target_compile_options(camera_recorder PRIVATE -O2)
 
 target_link_libraries(camera_recorder
+    # AI Noise Reduction
+    ncnn
+    # Audio and DSP
+    FLAC
+    kiss_fft
+    soxr
+    onnxruntime
     # Font
     freetype
     # Audio (USB capture + FLAC encoding)
     usb1
-    FLAC
     # MKV
     matroska
     ebml

@@ -37,9 +37,27 @@ struct RawSink {
                        int white)> on_raw;
 };
 
+// Streaming RAW16 video frames (raw video mode, while recording). `on_frame`
+// is invoked on the camera background thread with a pointer that is only
+// valid for the duration of the call — the consumer must copy synchronously.
+// `on_neutral` delivers the camera-space neutral (white balance reference)
+// captured when the clip's AWB was locked.
+struct RawVideoSink {
+    std::function<void(const uint8_t* data, int width, int height,
+                       int stride_bytes, int64_t ts_ns)> on_frame;
+    std::function<void(const float neutral[3])> on_neutral;
+};
+
 // Constructs the Java session object. `activity` is the NativeActivity jobject
 // (a Context). Must be called once before start/stop. Returns false on failure.
-bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink record, RawSink raw);
+bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink record,
+              RawSink raw, RawVideoSink raw_video);
+
+// Selects the capture pipeline BEFORE startPreview: when true the Java session
+// configures preview + streaming RAW16 (no MediaCodec, no HLG10 profile) and
+// recording delivers Bayer frames to RawVideoSink; when false the legacy
+// HLG10-encoder session is used.
+void hdr_set_raw_video(bool enabled);
 
 void hdr_start_preview();
 void hdr_stop_preview();

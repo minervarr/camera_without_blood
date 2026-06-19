@@ -5,6 +5,15 @@
 
 namespace mux {
 
+// Colour tagging for the video track. The container tags MUST match what the
+// encoder actually produced (bitstream VUI) — a mismatch is what broke
+// playback on strict players.
+enum class Color {
+    SDR,              // no Colour element
+    HDR_HLG_LIMITED,  // 10-bit BT.2020 / HLG / broadcast (limited) range
+    HDR_PQ_FULL,      // 10-bit BT.2020 / PQ (SMPTE ST 2084) / FULL range
+};
+
 struct VideoTrackConfig {
     int32_t width;
     int32_t height;
@@ -15,8 +24,7 @@ struct VideoTrackConfig {
     // only written when this is present.
     const uint8_t* private_data;
     int            private_data_size;
-    // When true, tag the track as 10-bit BT.2020 / HLG HDR.
-    bool           hdr_hlg;
+    Color          color = Color::SDR;
 };
 
 struct AudioTrackConfig {

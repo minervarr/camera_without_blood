@@ -16,11 +16,20 @@
 namespace cam { class Camera; }
 namespace aud { class AudioCapture; }
 namespace mux { class Muxer; }
+namespace isp { class RawVideoPipeline; }
 class Renderer;
 
 namespace rec {
 
-enum class State { IDLE, PREVIEW, SAVING };
+// FINALIZING: the camera has stopped but the offline NLM pipeline is still
+// draining its frame backlog into the .mkv (the "Processing…" phase). No new
+// recording may start until it returns to PREVIEW.
+enum class State { IDLE, PREVIEW, SAVING, FINALIZING };
+
+// Which video pipeline records. RAW_PQ is the native path (RAW16 -> Vulkan
+// ISP -> HEVC Main10 PQ full-range); LEGACY_HLG is the Java HLG10 MediaCodec
+// path, kept as the fallback for devices without RAW or a P010 encoder.
+enum class VideoMode { RAW_PQ, LEGACY_HLG };
 
 class Recorder {
 public:
@@ -49,11 +58,36 @@ public:
     int         capture_orientation() const { return capture_orientation_; }
 
     State       state()    const { return state_.load(); }
+    VideoMode   video_mode() const { return video_mode_; }
     int64_t     duration_ms()   const;   // elapsed recording time
     std::string last_error()    const { return last_error_; }
 
+    // Finalize progress [0,100] while state()==FINALIZING (offline NLM drain).
+    int         finalize_percent() const;
+
+    // Toggles the RAW pipeline's Bayer denoise pass (A/B comparison). No-op in
+    // legacy mode. Toggle between recordings.
+    void set_denoise(bool on);
+
+    // Toggles the RAW pipeline's HQ (directional) demosaic vs Malvar (A/B
+    // comparison). No-op in legacy mode. Toggle between recordings.
+    void set_demosaic_hq(bool on);
+
+    // Toggles the RAW pipeline's motion-adaptive spatial-temporal denoise (A/B
+    // comparison; on by default). No-op in legacy mode. Toggle between recordings.
+    void set_temporal(bool on);
+
+    // Toggles the RAW pipeline's chroma-only spatial denoise (A/B comparison).
+    // Luma stays byte-identical. No-op in legacy mode. Toggle between recordings.
+    void set_chroma(bool on);
+
 private:
     void negotiate_codec();
+    void choose_video_mode();
+    // Shared by both pipelines: first codec config opens the muxer; packets
+    // are queued for the writer thread.
+    void on_video_format(const uint8_t* csd, int len, int w, int h);
+    void on_video_packet(const uint8_t* data, int len, int64_t pts_us, bool key);
 
     AAssetManager* assets_;
     JavaVM*        vm_       = nullptr;
@@ -65,6 +99,11 @@ private:
     std::unique_ptr<cam::Camera>      camera_;
     std::unique_ptr<aud::AudioCapture> audio_;
     std::unique_ptr<mux::Muxer>       muxer_;
+    std::unique_ptr<isp::RawVideoPipeline> raw_pipeline_;
+
+    VideoMode video_mode_       = VideoMode::LEGACY_HLG;
+    bool      mode_chosen_      = false;
+    int       configured_fps_   = 30;   // actual fps for the muxer container tag
 
     std::atomic<State> state_{State::IDLE};
     int                capture_orientation_ = 0;
@@ -77,20 +116,27 @@ private:
     std::atomic<bool>    muxer_opened_{false};
     std::mutex           muxer_open_mutex_;   // guards open()/close() sequencing
 
-    // Encoded video is muxed on its own thread so disk I/O (cluster flushes,
-    // several MB on each keyframe) never blocks the encoder drain — blocking it
-    // backpressures the camera and stalls the preview once per second.
-    struct VideoPkt { std::vector<uint8_t> data; int64_t pts_us; bool key; };
-    std::queue<VideoPkt>    video_q_;
+    // Both video AND audio are muxed on this one thread so disk I/O (cluster
+    // flushes, several MB on each keyframe at RAW-PQ bitrates) never blocks the
+    // encoder drain OR the FLAC capture thread — blocking either backpressures
+    // its source and drops frames/samples. `ts` is nanoseconds for audio and
+    // microseconds for video (converted at write); `key` is video-only.
+    struct MuxPkt { std::vector<uint8_t> data; int64_t ts; bool key; bool is_audio; };
+    std::queue<MuxPkt>      video_q_;
     std::mutex              video_q_mtx_;
     std::condition_variable video_q_cv_;
     std::thread             video_writer_;
     bool                    video_writer_run_ = false;
 
+    // Offline finalize: stop_saving() returns immediately and this thread drains
+    // the NLM backlog, flushes the encoder, and closes the muxer in the background.
+    std::thread             finalize_thread_;
+
     // Static DNG metadata (CFA, matrices, etc.), loaded once from the camera
-    // characteristics and reused for every bracketed RAW frame.
+    // characteristics; reused for bracketed RAW stills AND the RAW video ISP.
     dng::DngMeta         raw_meta_;
     bool                 raw_meta_loaded_ = false;
+    int                  raw_w_ = 0, raw_h_ = 0;
 
     // Codec negotiation result
     const char* video_codec_id_ = nullptr;  // "V_MPEGH/ISO/HEVC" or "V_MPEG4/ISO/AVC"

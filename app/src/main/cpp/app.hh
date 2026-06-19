@@ -45,6 +45,13 @@ private:
     bool recording_started_ = false;
     bool focused_ = false;
     bool resumed_ = false;
+    // Force a few UI redraws after the surface returns (even mid-recording, when we
+    // otherwise don't draw), to fill the freshly-recreated blank swapchain — else
+    // returning from the background while recording shows a black screen with no
+    // Stop button.
+    int  ui_repaint_frames_ = 0;
+    // Persisted photo/video toggle, so it survives UI rebuilds on surface recreate.
+    bool ui_video_mode_ = false;
 
     Orientation orientation_;
 };

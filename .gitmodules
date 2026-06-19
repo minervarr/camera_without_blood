@@ -24,3 +24,9 @@
 [submodule "libs/flac"]
 	path = libs/flac
 	url = https://github.com/xiph/flac
+[submodule "libs/ncnn"]
+	path = libs/ncnn
+	url = https://github.com/Tencent/ncnn.git
+[submodule "libs/rnnoise"]
+	path = libs/rnnoise
+	url = https://github.com/xiph/rnnoise.git

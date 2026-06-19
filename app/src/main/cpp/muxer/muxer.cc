@@ -2,6 +2,7 @@
 
 #include <ebml/StdIOCallback.h>
 #include <ebml/EbmlHead.h>
+#include <ebml/EbmlFloat.h>
 
 #include <matroska/KaxSegment.h>
 #include <matroska/KaxTracks.h>
@@ -26,8 +27,10 @@ namespace mux {
 // 1 ms tick. All timestamps fed to libmatroska are absolute nanoseconds from
 // the first frame; the library divides by this scale to get block timecodes.
 static constexpr uint64_t TS_SCALE = 1000000;
-// Cap cluster span so seeking/streaming stays sane even without keyframes.
-static constexpr int64_t  MAX_CLUSTER_NS = 2'000'000'000;  // 2 s
+// Cap cluster span. 1s (was 2s) halves each flush_cluster() disk write (~15MB vs
+// ~30MB at 120Mbps), so the periodic storage/memory-bus burst is gentler and is
+// less likely to starve the ISP GPU into a ~1Hz stall.
+static constexpr int64_t  MAX_CLUSTER_NS = 1'000'000'000;  // 1 s
 static const EbmlElement::ShouldWrite kWriteDefault = EbmlElement::WriteSkipDefault;
 
 struct Muxer::Impl {
@@ -44,6 +47,8 @@ struct Muxer::Impl {
     int64_t     cluster_base = 0;     // ns (relative to start_ns) of cluster start
 
     int64_t start_ns = -1;            // absolute ts of first frame seen
+    int64_t last_rel_ns = 0;          // newest block timestamp (for Duration)
+    uint64_t info_pos = 0;            // file offset of the rendered Info element
 
     bool have_video = false;
     bool have_audio = false;
@@ -84,11 +89,18 @@ bool Muxer::open(const std::string& path,
 
         impl_->segment.WriteHead(*impl_->file, 5, kWriteDefault);
 
-        // Segment info.
+        // Segment info. Duration is a fixed-size 8-byte float placeholder so
+        // close() can seek back and patch the real value in place — players
+        // then show the correct length immediately instead of estimating it
+        // while reading (the "duration keeps growing" symptom in mpv).
         KaxInfo& info = GetChild<KaxInfo>(impl_->segment);
         GetChild<KaxTimestampScale>(info).SetValue(TS_SCALE);
+        KaxDuration& dur = GetChild<KaxDuration>(info);
+        dur.SetPrecision(EbmlFloat::FLOAT_64);
+        dur.SetValue(1.0);
         GetChild<KaxMuxingApp>(info).SetValue(UTFstring{L"camera_without_blood"});
         GetChild<KaxWritingApp>(info).SetValue(UTFstring{L"camera_without_blood"});
+        impl_->info_pos = impl_->file->getFilePointer();
         info.Render(*impl_->file, kWriteDefault);
 
         impl_->tracks = &GetChild<KaxTracks>(impl_->segment);
@@ -109,13 +121,18 @@ bool Muxer::open(const std::string& path,
             GetChild<KaxVideoPixelWidth>(v).SetValue(vcfg.width);
             GetChild<KaxVideoPixelHeight>(v).SetValue(vcfg.height);
 
-            if (vcfg.hdr_hlg) {
+            if (vcfg.color != Color::SDR) {
                 KaxVideoColour& c = GetChild<KaxVideoColour>(v);
                 GetChild<KaxVideoBitsPerChannel>(c).SetValue(10);
                 GetChild<KaxVideoColourPrimaries>(c).SetValue(MATROSKA_VIDEO_PRIMARIES_BT2020);
-                GetChild<KaxVideoColourTransferCharacter>(c).SetValue(MATROSKA_TRANSFER_ARIB_STD_B67);
                 GetChild<KaxVideoColourMatrix>(c).SetValue(MATROSKA_VIDEO_MATRIXCOEFFICIENTS_BT2020_NCL);
-                GetChild<KaxVideoColourRange>(c).SetValue(MATROSKA_VIDEO_RANGE_BROADCAST_RANGE);
+                if (vcfg.color == Color::HDR_PQ_FULL) {
+                    GetChild<KaxVideoColourTransferCharacter>(c).SetValue(MATROSKA_TRANSFER_BT2100_PQ);
+                    GetChild<KaxVideoColourRange>(c).SetValue(MATROSKA_VIDEO_RANGE_FULL_RANGE);
+                } else {
+                    GetChild<KaxVideoColourTransferCharacter>(c).SetValue(MATROSKA_TRANSFER_ARIB_STD_B67);
+                    GetChild<KaxVideoColourRange>(c).SetValue(MATROSKA_VIDEO_RANGE_BROADCAST_RANGE);
+                }
             }
             impl_->video = &t;
             impl_->have_video = true;
@@ -148,8 +165,9 @@ bool Muxer::open(const std::string& path,
         impl_->cues.SetGlobalTimestampScale(TS_SCALE);
 
         open_ = true;
-        LOGI("Muxer open: %s (video=%d audio=%d hdr=%d)",
-             path.c_str(), impl_->have_video, impl_->have_audio, vcfg.hdr_hlg);
+        LOGI("Muxer open: %s (video=%d audio=%d color=%d)",
+             path.c_str(), impl_->have_video, impl_->have_audio,
+             static_cast<int>(vcfg.color));
         return true;
     } catch (std::exception& e) {
         LOGE("Muxer open failed: %s", e.what());
@@ -166,6 +184,18 @@ void Muxer::close() {
         impl_->flush_cluster();
         if (impl_->have_video || impl_->have_audio)
             impl_->cues.Render(*impl_->file, kWriteDefault);
+        // Patch the real duration over the placeholder written at open().
+        // KaxDuration is a fixed 8-byte float, so the re-rendered Info element
+        // is byte-identical in size.
+        if (impl_->last_rel_ns > 0) {
+            KaxInfo& info = GetChild<KaxInfo>(impl_->segment);
+            GetChild<KaxDuration>(info).SetValue(
+                static_cast<double>(impl_->last_rel_ns) / TS_SCALE);
+            uint64_t end = impl_->file->getFilePointer();
+            impl_->file->setFilePointer(static_cast<int64_t>(impl_->info_pos));
+            info.Render(*impl_->file, kWriteDefault);
+            impl_->file->setFilePointer(static_cast<int64_t>(end));
+        }
         // Segment keeps an unknown size (valid for streaming MKV); players read
         // it linearly without needing the final SeekHead.
     } catch (std::exception& e) {
@@ -185,6 +215,7 @@ void Muxer::write_video(const uint8_t* data, int size, int64_t timestamp_ns, boo
     if (impl_->start_ns < 0) impl_->start_ns = timestamp_ns;
     int64_t rel = timestamp_ns - impl_->start_ns;
     if (rel < 0) rel = 0;
+    if (rel > impl_->last_rel_ns) impl_->last_rel_ns = rel;
 
     // New cluster on each keyframe, when the current one grows too long, or when the
     // block would fall outside the cluster's 16-bit ms timecode range in EITHER
@@ -211,6 +242,7 @@ void Muxer::write_audio(const uint8_t* data, int size, int64_t timestamp_ns) {
     if (impl_->start_ns < 0) impl_->start_ns = timestamp_ns;
     int64_t rel = timestamp_ns - impl_->start_ns;
     if (rel < 0) rel = 0;
+    if (rel > impl_->last_rel_ns) impl_->last_rel_ns = rel;
 
     if (!impl_->cluster || llabs(rel - impl_->cluster_base) > MAX_CLUSTER_NS) {
         impl_->flush_cluster();

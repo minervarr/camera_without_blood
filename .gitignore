@@ -1,38 +1,83 @@
-# Build directories
+# Build directories & Gradle
 build/
 .gradle/
 gradle/
+local.properties
 
-# IDE
+# C++ / NDK native build artifacts (Android)
+.cxx/
+.externalNativeBuild/
+.cache/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+
+# IDE & Editors
 .idea/
 .vscode/
 *.swp
 *.swo
+*.suo
 *~
 
-# OS
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+ehthumbs.db
 
-# Gradle
+# Gradle Wrapper (ignored by request, or local-only wrapper)
 gradlew
 gradlew.bat
-local.properties
 
-# Build outputs
+# Python build & virtual environment files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Compiled build outputs, binaries, & libraries
 *.apk
 *.aab
+*.dex
+*.class
 *.so
 *.o
 *.a
+*.lib
+*.dll
+*.exe
+*.dylib
+*.spv
 
-# Logs
+# Machine Learning weights & Large zip archives
+*.zip
+*.tar.gz
+*.tgz
+onnx_extracted/
+tmp_df_golden/
+
+# Logs & Temporary dumps
+*.log
+_*.log
 logcat.txt
 adb_log.txt
 samsung_logs.txt
-
-# Misc generated files
-*.jks
-*.keystore
 cam_dump.txt
 _verify/
+screenshot.png
+
+# Keys & Certificates
+*.jks
+*.keystore
+*.pk8
+*.pem

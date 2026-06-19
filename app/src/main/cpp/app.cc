@@ -40,8 +40,15 @@ void App::run() {
         // forever) stops us from presenting duplicate frames on a timer, which was
         // what made SurfaceFlinger hunt the LTPO refresh rate and stall
         // vkWaitForFences ~90ms once per second.
+        // While finalizing there are no camera frames to wake us, but the UI must
+        // keep refreshing the "Processing…%" counter — poll on a short timeout so
+        // we redraw periodically. Otherwise block until the next frame/event (-1).
+        bool finalizing = recorder_ && recorder_->state() == rec::State::FINALIZING;
         int ident;
-        int timeout_ms = -1;
+        // Idle: block until the next frame/event (-1). While finalizing, tick on a
+        // 100ms timeout to advance "Processing…%". While we still owe the surface a
+        // few post-resume UI repaints, spin (0) so we draw them promptly.
+        int timeout_ms = (ui_repaint_frames_ > 0) ? 0 : (finalizing ? 100 : -1);
         while ((ident = ALooper_pollOnce(timeout_ms, nullptr, &events,
                                 reinterpret_cast<void**>(&source))) >= 0) {
             if (source) source->process(state_, source);
@@ -50,7 +57,19 @@ void App::run() {
             timeout_ms = 0;  // drain any remaining events without blocking
         }
 
-        if (renderer_ && renderer_->consume_frame_ready()) draw_frame();
+        // Don't present while recording: the swapchain present periodically stalls
+        // the ISP GPU compute ~90ms (the compositor holds our image), dropping
+        // frames. With the preview also dropped from the capture request, this loop
+        // mostly idles during recording — the GPU is the native ISP's.
+        // EXCEPTION: the few repaints we owe a freshly-recreated swapchain after
+        // returning to the foreground, so the Stop button is actually on screen
+        // (returning from background mid-recording would otherwise show black).
+        bool ready  = renderer_ && renderer_->consume_frame_ready();
+        bool saving = recorder_ && recorder_->state() == rec::State::SAVING;
+        if (renderer_ && (ui_repaint_frames_ > 0 || (!saving && (ready || finalizing)))) {
+            draw_frame();
+            if (ui_repaint_frames_ > 0) --ui_repaint_frames_;
+        }
     }
 }
 
@@ -84,6 +103,17 @@ void App::init_vulkan() {
     canvas_   = new Canvas(canvas_data_, renderer_->width(), renderer_->height(),
                            font_loaded_ ? &overlay_font_ : nullptr, 0.0f, 0.0f, 0.0f, 0.0f);
     ui_       = new ui::UI(*canvas_);
+    // Restore the photo/video toggle, and force VIDEO whenever a recording is in
+    // progress (SAVING/FINALIZING) so the Stop button shows after returning from
+    // the background mid-recording.
+    {
+        bool vm = ui_video_mode_;
+        if (recorder_) {
+            rec::State s = recorder_->state();
+            if (s == rec::State::SAVING || s == rec::State::FINALIZING) vm = true;
+        }
+        ui_->set_video_mode(vm);
+    }
     LOGI("Renderer/UI initialized");
 
     // If the camera is already running (renderer was recreated), re-point it at
@@ -91,6 +121,10 @@ void App::init_vulkan() {
     if (recorder_) {
         recorder_->set_renderer(renderer_);
     }
+
+    // The swapchain is brand-new (blank). Repaint the UI for a few frames so the
+    // controls are on screen even mid-recording (when run() otherwise won't draw).
+    ui_repaint_frames_ = 4;
 
     maybe_start_recording();
 }
@@ -145,6 +179,7 @@ void App::destroy_vulkan() {
     if (recorder_) recorder_->set_renderer(nullptr);
     if (renderer_) renderer_->clear_camera_frames();
 
+    if (ui_) ui_video_mode_ = ui_->is_video_mode();   // remember toggle across rebuild
     delete ui_;       ui_       = nullptr;
     delete canvas_;   canvas_   = nullptr;
     delete renderer_; renderer_ = nullptr;
@@ -171,11 +206,19 @@ int32_t App::handle_input(android_app* app, AInputEvent* event) {
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
         auto* self = reinterpret_cast<App*>(app->userData);
         if (self->ui_ && self->recorder_) {
+            // Lock the UI while the previous clip is finalizing — no new recording
+            // and no mode switch until the file is written.
+            if (self->recorder_->state() == rec::State::FINALIZING) return 1;
             int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
             if (action == AMOTION_EVENT_ACTION_DOWN) {
                 float x = AMotionEvent_getX(event, 0);
                 float y = AMotionEvent_getY(event, 0);
                 ui::UI::Action act = self->ui_->on_touch(x, y);
+                // The RAW-pipeline A/B toggles (DN/DM/TD/CD) were removed from the
+                // UI once the best config was locked in as the default (HQ demosaic
+                // + chroma denoise on). The implementations live on in the pipeline
+                // (Recorder::set_denoise/set_demosaic_hq/set_temporal/set_chroma)
+                // for later refinement; they're just no longer driven from the UI.
                 if (act == ui::UI::Action::SHUTTER) {
                     auto now = std::chrono::system_clock::now();
                     std::time_t now_c = std::chrono::system_clock::to_time_t(now);
@@ -242,6 +285,10 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
             if (self->permissions_granted_ && !self->renderer_ && app->window) {
                 self->init_vulkan();
             }
+            // Returning to the foreground: repaint the UI so the controls are
+            // visible/fresh (covers the case where the surface persisted and the
+            // swapchain wasn't recreated by init_vulkan).
+            self->ui_repaint_frames_ = 4;
             self->maybe_start_recording();
             break;
         case APP_CMD_LOST_FOCUS:
@@ -254,11 +301,15 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
             self->maybe_start_recording();
             break;
         case APP_CMD_PAUSE:
-            // App is leaving the foreground: release the camera now, cleanly,
-            // before Android force-revokes it. Reacquired on the next RESUME.
+            // App is leaving the foreground. If we are recording a video, keep the
+            // camera running in the background. Otherwise, release it so Android
+            // doesn't force-revoke it and break our session.
             self->resumed_ = false;
             self->orientation_.disable();
-            self->stop_recording();
+            if (self->recorder_ && self->recorder_->state() != rec::State::SAVING && 
+                self->recorder_->state() != rec::State::FINALIZING) {
+                self->stop_recording();
+            }
             break;
         case APP_CMD_TERM_WINDOW:
             // Surface is gone: tear down ONLY the renderer. The camera keeps
