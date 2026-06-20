@@ -28,10 +28,54 @@ param(
   [string]$Ndk         = "",
   [string]$Python      = "python",
   [string]$SrcDir      = (Join-Path $PSScriptRoot ".ort_src"),
-  [switch]$SkipClone
+  [switch]$SkipClone,
+  [switch]$ForceClone
 )
 
 $ErrorActionPreference = "Stop"
+
+# ONNX Runtime pins SHA1 hashes for its third-party archive downloads in
+# cmake/deps.txt. GitLab periodically regenerates its archive .zip files (same
+# source, different compression -> different bytes -> different SHA1), which makes
+# the eigen download fail with "Hash mismatch" / "Each download failed!". Recompute
+# the hash from what GitLab serves now and patch deps.txt so the build self-heals
+# instead of being pinned to a stale hash. Returns $true if it changed anything.
+function Repair-DepsHashes {
+  param([string]$DepsFile)
+  try {
+    [Net.ServicePointManager]::SecurityProtocol =
+      [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  } catch {}
+  $changed = $false
+  $lines = @(Get-Content -Path $DepsFile)
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $line = $lines[$i]
+    if ($line -match '^\s*#' -or [string]::IsNullOrWhiteSpace($line)) { continue }
+    $parts = $line.Split(';')
+    if ($parts.Count -lt 3) { continue }
+    $url = $parts[1].Trim()
+    if ($url -notmatch 'gitlab\.com/.+/-/archive/') { continue }   # only gitlab zips are unstable
+    $name = $parts[0].Trim()
+    $expected = $parts[2].Trim().ToLower()
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+      Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+      $actual = (Get-FileHash -Algorithm SHA1 -Path $tmp).Hash.ToLower()
+    } finally {
+      Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    }
+    if ($actual -ne $expected) {
+      Write-Host "    ${name}: $expected -> $actual (gitlab rehashed its archive)" -ForegroundColor Yellow
+      $parts[2] = $actual
+      $lines[$i] = ($parts -join ';')
+      $changed = $true
+    } else {
+      Write-Host "    ${name}: hash OK"
+    }
+  }
+  if ($changed) { Set-Content -Path $DepsFile -Value $lines -Encoding ascii }
+  return $changed
+}
 
 # --- resolve toolchain -------------------------------------------------------
 if (-not $Sdk) { $Sdk = "C:/PPProgam/android_sdk" }
@@ -54,13 +98,28 @@ Write-Host "Install to  : $dest/libonnxruntime.so"
 Write-Host ""
 
 # --- 1. fetch source at the matching tag ------------------------------------
-if (-not $SkipClone) {
+if ($SkipClone) {
+  Write-Host "==> reusing existing checkout (-SkipClone): $SrcDir"
+} elseif ((Test-Path $buildPy) -and -not $ForceClone) {
+  Write-Host "==> source already present, reusing it (pass -ForceClone to re-fetch)"
+} else {
+  Write-Host "==> cloning ONNX Runtime $OrtVersion"
   if (Test-Path $SrcDir) { Remove-Item -Recurse -Force $SrcDir }
   git clone --recursive --depth 1 --branch $OrtVersion `
     https://github.com/microsoft/onnxruntime $SrcDir
   if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
 }
 if (-not (Test-Path $buildPy)) { throw "build.py not found at $buildPy (bad checkout?)" }
+
+# --- 1b. self-heal stale gitlab archive hashes (eigen) ----------------------
+Write-Host "==> verifying third-party archive hashes (cmake/deps.txt)"
+$depsFile = Join-Path $SrcDir "cmake/deps.txt"
+if ((Test-Path $depsFile) -and (Repair-DepsHashes $depsFile)) {
+  if (Test-Path $buildDir) {
+    Write-Host "    deps.txt updated; clearing stale build dir for a clean re-configure"
+    Remove-Item -Recurse -Force $buildDir
+  }
+}
 
 # --- 2. cross-compile the shared lib ----------------------------------------
 # CMAKE_POLICY_VERSION_MINIMUM=3.5 lets newer CMake (4.x) configure ORT's older
