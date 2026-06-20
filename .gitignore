@@ -59,6 +59,9 @@ ENV/
 *.dylib
 *.spv
 
+# ONNX Runtime from-source build checkout (see build_onnxruntime.ps1)
+.ort_src/
+
 # Machine Learning weights & Large zip archives
 *.zip
 *.tar.gz
