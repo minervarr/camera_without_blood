@@ -57,12 +57,20 @@ function Repair-DepsHashes {
     if ($url -notmatch 'gitlab\.com/.+/-/archive/') { continue }   # only gitlab zips are unstable
     $name = $parts[0].Trim()
     $expected = $parts[2].Trim().ToLower()
+    # Use pure .NET (not Invoke-WebRequest / Get-FileHash): those live in
+    # Microsoft.PowerShell.Utility and can be unavailable under Windows PowerShell 5.1
+    # as launched by build.bat. .NET types work in every PowerShell edition.
     $tmp = [System.IO.Path]::GetTempFileName()
     try {
-      Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-      $actual = (Get-FileHash -Algorithm SHA1 -Path $tmp).Hash.ToLower()
+      $wc = [System.Net.WebClient]::new()
+      try { $wc.DownloadFile($url, $tmp) } finally { $wc.Dispose() }
+      $sha1 = [System.Security.Cryptography.SHA1]::Create()
+      try {
+        $actual = [System.BitConverter]::ToString(
+          $sha1.ComputeHash([System.IO.File]::ReadAllBytes($tmp))).Replace('-','').ToLower()
+      } finally { $sha1.Dispose() }
     } finally {
-      Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+      [System.IO.File]::Delete($tmp)
     }
     if ($actual -ne $expected) {
       Write-Host "    ${name}: $expected -> $actual (gitlab rehashed its archive)" -ForegroundColor Yellow
