@@ -37,15 +37,6 @@ function Find-BuildPython {
   return "python"
 }
 
-# --- 1. submodules -----------------------------------------------------------
-if (-not $SkipSubmodules) {
-  Write-Host "==> [1/3] git submodule update --init --recursive" -ForegroundColor Cyan
-  git -C $root submodule update --init --recursive
-  if ($LASTEXITCODE -ne 0) { throw "submodule update failed" }
-} else {
-  Write-Host "==> [1/3] submodules skipped (-SkipSubmodules)" -ForegroundColor DarkGray
-}
-
 # --- 2. ONNX Runtime .so -----------------------------------------------------
 $so = Join-Path $root "libs/onnxruntime/lib/arm64-v8a/libonnxruntime.so"
 if ($SkipOnnx) {
