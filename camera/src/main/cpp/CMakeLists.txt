@@ -130,7 +130,7 @@ add_library(camera_recorder SHARED
     camera/dng_meta_source.cc
     camera/still_writer.cc
     camera/hdr_merge.cc
-    camera/raw_develop.cc
+    camera/mtb_align.cc
 
     # ISP (Video Pipeline)
     isp/ai_denoiser.cc

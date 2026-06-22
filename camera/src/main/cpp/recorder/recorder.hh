@@ -53,9 +53,12 @@ public:
     // HEVC encoder. Driven by the UI's PHOTO/VIDEO toggle.
     void set_photo_mode(bool photo);
 
-    // Photo output mode for RAW still bracket captures:
-    //   0 = RAW_BRACKET (3 source DNGs + merged DNG), 1 = RAW_MERGED (merged DNG
-    //   only), 2 = HDR_IMAGE (developed Radiance .hdr only). Read at burst start.
+    // Photo output mode (RAW devices). Everything stays RAW DNG — HDR is developed
+    // on a PC:
+    //   0 = FAST   — one raw shot -> 1 DNG (instant, motion-proof, full range),
+    //   1 = STATIC — 3-shot bracket merged -> 1 DNG (tripod/static, extra stops),
+    //   2 = STATIC + RAW set — 3 source DNGs + the merged DNG (PC re-merge).
+    // Read at shot time (FAST fires 1 shot, STATIC fires 3).
     void set_photo_output_mode(int m) { photo_output_mode_.store(m); }
 
     // Re-point (or detach) the renderer that camera frames composite into.
@@ -161,8 +164,7 @@ private:
     std::vector<hdr::BracketFrame> bracket_frames_;
     std::string                    bracket_base_;     // merged output base (no _idx.dng)
     int                            bracket_count_ = 0;// expected frames in the burst
-    int                            bracket_mode_  = 0;// output mode snapshot for this burst
-    std::atomic<int>               photo_output_mode_{0};  // 0=BRACKET 1=MERGED 2=HDR_IMAGE
+    std::atomic<int>               photo_output_mode_{0};  // 0=FAST 1=STATIC 2=STATIC+RAW
     std::mutex                     bracket_mtx_;
     std::thread                    bracket_worker_;
 

@@ -119,6 +119,10 @@ public class HdrCameraSession {
     // arrive in-flight just after recording stops) instead of leaking the
     // ImageReader's buffers. Guarded by rawLock.
     private int photoFramesWanted = 0;
+    // Stable size of the current still burst (1 = FAST single shot, 3 = STATIC
+    // bracket). Unlike photoFramesWanted (which counts down), this stays put so the
+    // native side learns the burst size and the single-shot file gets a clean name.
+    private int photoBurstSize = BRACKET_COUNT;
     private final Object rawLock = new Object();
     private final HashMap<Long, Image> pendingImages = new HashMap<>();
     private final HashMap<Long, TotalCaptureResult> pendingResults = new HashMap<>();
@@ -691,7 +695,7 @@ public class HdrCameraSession {
 
     // ── Bracketed RAW still ──────────────────────────────────────────────────
 
-    public synchronized void takePhoto(String basePath) {
+    public synchronized void takePhoto(String basePath, int shots) {
         // Capture the still stream that the current session actually has wired in
         // (activeStill): DNG on RAW devices, full-res YUV→PNG otherwise. In VIDEO
         // mode the session holds the encoder, not a still stream → STILL_NONE.
@@ -703,17 +707,28 @@ public class HdrCameraSession {
         if (activeStill == STILL_YUV) { captureYuvStill(); return; }
         // STILL_RAW: arm the still path to accept exactly this burst's frames (and
         // clear any stale state from a previous, possibly-incomplete burst).
-        synchronized (rawLock) { flushPendingStills(); photoFramesWanted = BRACKET_COUNT; }
+        final int shotCount = Math.max(1, shots);
+        synchronized (rawLock) {
+            flushPendingStills();
+            photoFramesWanted = shotCount;
+            photoBurstSize    = shotCount;
+        }
         try {
-            // Exposure-compensation steps for -2 / 0 / +2 EV, clamped to range.
-            Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+            // FAST = one shot at EV 0 (motion-proof). STATIC = -2 / 0 / +2 EV
+            // exposure bracket, clamped to the device's compensation range.
+            int[] evComp;
+            if (shotCount <= 1) {
+                evComp = new int[]{ 0 };
+            } else {
+                Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+                double stepEv = step != null ? step.doubleValue() : (1.0 / 3.0);
+                int two = (int) Math.round(2.0 / (stepEv > 0 ? stepEv : (1.0 / 3.0)));
+                evComp = new int[]{ -two, 0, two };
+            }
             Range<Integer> range = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
-            double stepEv = step != null ? step.doubleValue() : (1.0 / 3.0);
-            int two = (int) Math.round(2.0 / (stepEv > 0 ? stepEv : (1.0 / 3.0)));
-            int[] evComp = { -two, 0, two };
 
             List<CaptureRequest> burst = new ArrayList<>();
-            for (int i = 0; i < BRACKET_COUNT; i++) {
+            for (int i = 0; i < shotCount; i++) {
                 CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
                 b.addTarget(rawReader.getSurface());
                 int comp = evComp[i];
@@ -726,7 +741,7 @@ public class HdrCameraSession {
                 burst.add(b.build());
             }
             session.captureBurst(burst, captureCallback, bgHandler);
-            Log.i(TAG, "takePhoto burst x" + BRACKET_COUNT + " -> " + basePath);
+            Log.i(TAG, "takePhoto burst x" + shotCount + " -> " + basePath);
         } catch (CameraAccessException e) {
             Log.e(TAG, "takePhoto failed", e);
         }
@@ -906,10 +921,12 @@ public class HdrCameraSession {
 
             Image.Plane plane = img.getPlanes()[0];
             ByteBuffer buf = plane.getBuffer();
-            String path = photoBase + "_" + idx + ".dng";
+            // FAST single shot gets a clean name; a bracket gets per-frame indices.
+            String path = (photoBurstSize <= 1) ? (photoBase + ".dng")
+                                                : (photoBase + "_" + idx + ".dng");
             nativeOnRawFrame(nativeCtx, path, buf, rawWidth, rawHeight,
                     plane.getRowStride(), neutral, black, white != null ? white : 0,
-                    expNs != null ? expNs : 0L, iso != null ? iso : 0, idx, BRACKET_COUNT);
+                    expNs != null ? expNs : 0L, iso != null ? iso : 0, idx, photoBurstSize);
         } catch (Exception e) {
             Log.e(TAG, "emit RAW failed", e);
         } finally {

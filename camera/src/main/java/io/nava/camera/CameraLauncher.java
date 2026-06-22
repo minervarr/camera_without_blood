@@ -29,21 +29,22 @@ public final class CameraLauncher {
      *  PHOTO/VIDEO toggle remains available either way. */
     public static final String EXTRA_START_VIDEO = "io.nava.camera.START_VIDEO";
 
-    /** Optional {@code int} extra: RAW photo output mode (see PHOTO_MODE_* below;
-     *  default {@link #PHOTO_MODE_RAW_BRACKET}). RAW-sensor devices only — non-RAW
-     *  devices always save a single image. */
+    /** Optional {@code int} extra: photo output mode (see PHOTO_MODE_* below;
+     *  default {@link #PHOTO_MODE_FAST_HDR}). RAW-sensor devices only — non-RAW
+     *  devices always save a single image. Everything stays RAW DNG; develop the
+     *  HDR on a PC. */
     public static final String EXTRA_PHOTO_MODE = "io.nava.camera.PHOTO_MODE";
 
     /** Optional {@code boolean} extra: show the in-scene photo-mode selector
      *  (default true). Set false to lock the mode to {@link #EXTRA_PHOTO_MODE}. */
     public static final String EXTRA_PHOTO_MODE_UI = "io.nava.camera.PHOTO_MODE_UI";
 
-    /** 3 source DNGs + the merged HDR DNG (4 files). */
-    public static final int PHOTO_MODE_RAW_BRACKET = 0;
-    /** Only the merged HDR DNG (1 file). */
-    public static final int PHOTO_MODE_RAW_MERGED  = 1;
-    /** Only a developed scene-referred HDR image (Radiance .hdr, 1 file). */
-    public static final int PHOTO_MODE_HDR_IMAGE   = 2;
+    /** FAST: one raw shot → 1 DNG. Instant, motion-proof, full sensor range. Default. */
+    public static final int PHOTO_MODE_FAST_HDR       = 0;
+    /** STATIC: 3-shot exposure bracket merged → 1 DNG (tripod/static; extra stops). */
+    public static final int PHOTO_MODE_STATIC_HDR     = 1;
+    /** STATIC + RAW set: the 3 source DNGs + the merged DNG (re-merge/develop on PC). */
+    public static final int PHOTO_MODE_STATIC_HDR_RAW = 2;
 
     /** Result {@code String[]} extra: absolute paths of the files captured. */
     public static final String EXTRA_RESULT_FILES = "io.nava.camera.RESULT_FILES";

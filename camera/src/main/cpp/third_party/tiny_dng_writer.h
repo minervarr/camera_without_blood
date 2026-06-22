@@ -202,6 +202,11 @@ class DNGImage {
   /// Specify white level per sample.
   bool SetWhiteLevelRational(unsigned int num_samples, const double *values);
 
+  /// Specify white level per sample as SHORT/LONG integers. The DNG spec
+  /// requires WhiteLevel (50717) to be an integer type; the RATIONAL variant
+  /// above is rejected by Adobe dng_sdk (Android's RAW decoder).
+  bool SetWhiteLevel(unsigned int num_samples, const unsigned int *values);
+
   /// Specify analog white balance from camera for raw values.
   bool SetAnalogBalance(const unsigned int plane_count, const double *matrix_values);
 
@@ -216,6 +221,9 @@ class DNGImage {
 
   /// Specify DNG version.
   bool SetDNGVersion(const unsigned char a, const unsigned char b, const unsigned char c, const unsigned char d);
+
+  /// Specify DNG backward version (oldest reader version able to parse this file).
+  bool SetDNGBackwardVersion(const unsigned char a, const unsigned char b, const unsigned char c, const unsigned char d);
 
   /// Specify transformation matrix (XYZ to reference camera native color space values, under the first calibration illuminant).
   bool SetColorMatrix1(const unsigned int plane_count, const double *matrix_values);
@@ -1518,7 +1526,7 @@ bool DNGImage::SetBlackLevelRational(unsigned int num_samples,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1561,7 +1569,7 @@ bool DNGImage::SetWhiteLevelRational(unsigned int num_samples,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1586,6 +1594,31 @@ bool DNGImage::SetWhiteLevelRational(unsigned int num_samples,
   return true;
 }
 
+bool DNGImage::SetWhiteLevel(const unsigned int num_samples,
+                             const unsigned int *values) {
+  // WhiteLevel (tag 50717) is SHORT or LONG per the DNG/TIFF spec. Some writers
+  // emit RATIONAL, which Adobe dng_sdk (Android's RAW decoder) rejects. Write
+  // LONG; the integer value is unchanged, so this is lossless. WriteTIFFTag
+  // byte-swaps primitive types itself when big-endian, so no manual swap here.
+  if (num_samples == 0) {
+    return false;
+  }
+
+  std::vector<unsigned int> vs(values, values + num_samples);
+
+  bool ret = WriteTIFFTag(static_cast<unsigned short>(TIFFTAG_WHITE_LEVEL),
+                          TIFF_LONG, num_samples,
+                          reinterpret_cast<const unsigned char *>(vs.data()),
+                          &ifd_tags_, &data_os_);
+
+  if (!ret) {
+    return false;
+  }
+
+  num_fields_++;
+  return true;
+}
+
 bool DNGImage::SetXResolution(const double value) {
   double numerator, denominator;
   if (DoubleToRational(value, &numerator, &denominator) != 0) {
@@ -1594,7 +1627,7 @@ bool DNGImage::SetXResolution(const double value) {
   }
 
   unsigned int data[2];
-  data[0] = static_cast<unsigned int>(numerator);
+  data[0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
   data[1] = static_cast<unsigned int>(denominator);
 
   // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1623,7 +1656,7 @@ bool DNGImage::SetYResolution(const double value) {
   }
 
   unsigned int data[2];
-  data[0] = static_cast<unsigned int>(numerator);
+  data[0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
   data[1] = static_cast<unsigned int>(denominator);
 
   // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1784,6 +1817,25 @@ bool DNGImage::SetDNGVersion(const unsigned char a,
   return true;
 }
 
+bool DNGImage::SetDNGBackwardVersion(const unsigned char a,
+                                     const unsigned char b,
+                                     const unsigned char c,
+                                     const unsigned char d) {
+  unsigned char data[4] = {a, b, c, d};
+
+  bool ret = WriteTIFFTag(
+      static_cast<unsigned short>(TIFFTAG_DNG_BACKWARD_VERSION), TIFF_BYTE, 4,
+      reinterpret_cast<const unsigned char *>(data),
+      &ifd_tags_, &data_os_);
+
+  if (!ret) {
+    return false;
+  }
+
+  num_fields_++;
+  return true;
+}
+
 bool DNGImage::SetColorMatrix1(const unsigned int plane_count,
                                const double *matrix_values) {
   std::vector<unsigned int> vs(plane_count * 3 * 2);
@@ -1794,7 +1846,7 @@ bool DNGImage::SetColorMatrix1(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1826,7 +1878,7 @@ bool DNGImage::SetColorMatrix2(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1858,7 +1910,7 @@ bool DNGImage::SetForwardMatrix1(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1890,7 +1942,7 @@ bool DNGImage::SetForwardMatrix2(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1922,7 +1974,7 @@ bool DNGImage::SetCameraCalibration1(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1954,7 +2006,7 @@ bool DNGImage::SetCameraCalibration2(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -1986,7 +2038,7 @@ bool DNGImage::SetAnalogBalance(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -2099,7 +2151,7 @@ bool DNGImage::SetAsShotNeutral(const unsigned int plane_count,
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.
@@ -2131,7 +2183,7 @@ bool DNGImage::SetAsShotWhiteXY(const double x, const double y) {
       return false;
     }
 
-    vs[2 * i + 0] = static_cast<unsigned int>(numerator);
+    vs[2 * i + 0] = static_cast<unsigned int>(static_cast<int64_t>(numerator));
     vs[2 * i + 1] = static_cast<unsigned int>(denominator);
 
     // TODO(syoyo): Swap rational value(8 bytes) when writing IFD tag, not here.

@@ -59,6 +59,7 @@ bool write_dng(const std::string& path, const uint16_t* data, const DngMeta& m) 
     dng.SetOrientation(tiff_orientation(m.orientation_deg));
 
     dng.SetDNGVersion(1, 4, 0, 0);
+    dng.SetDNGBackwardVersion(1, 4, 0, 0);
     dng.SetUniqueCameraModel(m.camera_model);
     dng.SetSoftware("camera_without_blood");
 
@@ -76,11 +77,11 @@ bool write_dng(const std::string& path, const uint16_t* data, const DngMeta& m) 
         black[i] = static_cast<unsigned short>(v < 0 ? 0 : v + 0.5);
     }
     dng.SetBlackLevel(4, black);
-    unsigned short white = static_cast<unsigned short>(m.white_level);
-    // SetWhiteLevelRational expects doubles per sample.
-    double whitev[1] = {static_cast<double>(m.white_level)};
-    dng.SetWhiteLevelRational(1, whitev);
-    (void)white;
+    // WhiteLevel must be SHORT/LONG, not RATIONAL, or Adobe dng_sdk (Android's
+    // RAW decoder, e.g. ImageDecoder/BitmapFactory) rejects the file. Write it
+    // as LONG — same value, no data loss.
+    unsigned int whitev[1] = {static_cast<unsigned int>(m.white_level)};
+    dng.SetWhiteLevel(1, whitev);
 
     if (m.has_active) {
         unsigned int aa[4] = {

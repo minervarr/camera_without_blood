@@ -91,7 +91,7 @@ bool hdr_init(JavaVM* vm, jobject activity, PreviewSink preview, RecordSink reco
                 g_release = env->GetMethodID(cls, "releaseImage", "(Landroid/media/Image;)V");
                 g_start_rec = env->GetMethodID(cls, "startRecording", "()V");
                 g_stop_rec  = env->GetMethodID(cls, "stopRecording", "()V");
-                g_take_photo = env->GetMethodID(cls, "takePhoto", "(Ljava/lang/String;)V");
+                g_take_photo = env->GetMethodID(cls, "takePhoto", "(Ljava/lang/String;I)V");
                 g_request_usb = env->GetMethodID(cls, "requestUsbAccess", "()V");
                 g_set_raw_mode = env->GetMethodID(cls, "setRawVideoMode", "(Z)V");
                 g_set_photo_mode = env->GetMethodID(cls, "setPhotoMode", "(Z)V");
@@ -182,13 +182,13 @@ void hdr_request_usb() {
 
 int usb_fd() { return g_usb_fd; }
 
-void hdr_take_photo(const char* base_path) {
+void hdr_take_photo(const char* base_path, int shots) {
     if (!g_session) return;
     bool detach = false;
     JNIEnv* env = env_for_thread(&detach);
     if (!env) return;
     jstring s = env->NewStringUTF(base_path);
-    env->CallVoidMethod(g_session, g_take_photo, s);
+    env->CallVoidMethod(g_session, g_take_photo, s, shots);
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
     env->DeleteLocalRef(s);
     if (detach) g_vm->DetachCurrentThread();

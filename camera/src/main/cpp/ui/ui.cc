@@ -73,10 +73,10 @@ void UI::draw_photo_mode(int device_orientation) {
     canvas_.button(toggle_btn_.x, toggle_btn_.y, toggle_btn_.w, toggle_btn_.h, "VIDEO", col::panel, col::text, toggle_h * 0.2f);
 
     // Photo output-mode chip (mirrors the toggle on the left). Only when the host
-    // left the selector enabled. RAW3 = 3 sources + merged DNG; RAW1 = merged DNG
-    // only; HDR = developed Radiance .hdr only.
+    // left the selector enabled. FAST = 1 raw shot (instant, motion-proof);
+    // STATIC = 3-shot merged DNG; STATIC+ = merged DNG + the 3 source DNGs.
     if (photo_mode_ui_enabled_) {
-        static const char* kLabels[3] = {"RAW3", "RAW1", "HDR"};
+        static const char* kLabels[3] = {"FAST", "STATIC", "STATIC+"};
         float chip_w = toggle_w, chip_h = toggle_h;
         photo_mode_btn_ = {w * 0.2f - chip_w * 0.5f, bottom_y - chip_h * 0.5f, chip_w, chip_h};
         canvas_.button(photo_mode_btn_.x, photo_mode_btn_.y, photo_mode_btn_.w, photo_mode_btn_.h,

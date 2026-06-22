@@ -79,9 +79,9 @@ void hdr_stop_preview();
 void hdr_start_recording();
 void hdr_stop_recording();
 
-// Fires a 3-shot exposure-bracketed RAW burst; each frame is written as
-// `<base_path>_<index>.dng`.
-void hdr_take_photo(const char* base_path);
+// Fires a RAW still burst of `shots` frames (1 = FAST single shot -> `<base>.dng`;
+// 3 = exposure-bracketed -> `<base>_<index>.dng` for the STATIC modes).
+void hdr_take_photo(const char* base_path, int shots);
 
 // Asks the Java layer to obtain USB permission for the attached audio DAC and
 // open it. The resulting libusb file descriptor (or 0 if none/denied) is then

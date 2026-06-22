@@ -35,9 +35,9 @@ public class DemoLauncherActivity extends Activity {
 
         // One button per photo output mode (the in-scene chip stays enabled so the
         // mode can also be changed inside the camera).
-        addModeButton(root, "Camera — RAW bracket (3 + merged)", CameraLauncher.PHOTO_MODE_RAW_BRACKET);
-        addModeButton(root, "Camera — merged DNG only",          CameraLauncher.PHOTO_MODE_RAW_MERGED);
-        addModeButton(root, "Camera — HDR image (.hdr)",         CameraLauncher.PHOTO_MODE_HDR_IMAGE);
+        addModeButton(root, "Camera — FAST HDR (1 DNG, default)", CameraLauncher.PHOTO_MODE_FAST_HDR);
+        addModeButton(root, "Camera — STATIC HDR (merged DNG)",   CameraLauncher.PHOTO_MODE_STATIC_HDR);
+        addModeButton(root, "Camera — STATIC HDR + RAW set",      CameraLauncher.PHOTO_MODE_STATIC_HDR_RAW);
 
         setContentView(root);
     }

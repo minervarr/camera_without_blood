@@ -45,13 +45,13 @@ public class CameraActivity extends NativeActivity {
                 && getIntent().getBooleanExtra(CameraLauncher.EXTRA_START_VIDEO, false);
     }
 
-    /** Initial RAW photo output mode (0=bracket, 1=merged, 2=HDR image). */
+    /** Initial photo output mode (0=FAST, 1=STATIC, 2=STATIC+RAW). */
     @SuppressWarnings("unused") // called from native via JNI
     public int cameraPhotoMode() {
         return getIntent() != null
                 ? getIntent().getIntExtra(CameraLauncher.EXTRA_PHOTO_MODE,
-                                          CameraLauncher.PHOTO_MODE_RAW_BRACKET)
-                : CameraLauncher.PHOTO_MODE_RAW_BRACKET;
+                                          CameraLauncher.PHOTO_MODE_FAST_HDR)
+                : CameraLauncher.PHOTO_MODE_FAST_HDR;
     }
 
     /** Whether the in-scene photo-mode selector is shown (default true). */

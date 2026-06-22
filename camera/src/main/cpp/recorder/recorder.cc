@@ -4,7 +4,6 @@
 #include "../muxer/muxer.hh"
 #include "../muxer/hevc_bitstream.hh"
 #include "../camera/dng_meta_source.hh"
-#include "../camera/raw_develop.hh"
 #include "../jni/jni_camera.hh"
 #include "../isp/raw_video_pipeline.hh"
 
@@ -79,7 +78,6 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
         bracket_frames_.clear();
         bracket_base_  = base;
         bracket_count_ = count;
-        bracket_mode_  = photo_output_mode_.load();  // snapshot for the whole burst
     }
 
     // Copy the frame de-strided (contiguous width*height) + its merge metadata.
@@ -103,22 +101,18 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
     // global session registry, so it's safe to outlive this call.
     auto frames = std::move(bracket_frames_);
     bracket_frames_.clear();
-    const int mode = bracket_mode_;          // 0=BRACKET 1=MERGED 2=HDR_IMAGE
     bracket_base_.clear();                    // `base` (above) holds the output base
     const dng::DngMeta meta = raw_meta_;     // static tags (CFA, colour matrices)
 
     if (bracket_worker_.joinable()) bracket_worker_.join();  // serialize bursts
     bracket_worker_ = std::thread(
-        [frames = std::move(frames), meta, base, mode]() mutable {
+        [frames = std::move(frames), meta, base]() mutable {
+            // Static HDR: merge the bracket into one Bayer DNG (kept RAW; the user
+            // develops the HDR on a PC). Reached only for the 3-shot Static modes.
             hdr::MergeResult r = hdr::merge_raw_bracket(frames, meta);
             if (!r.ok) return;  // sources (if any) already on disk — nothing lost
-            if (mode == 2 /*HDR_IMAGE*/) {
-                const std::string out = base + ".hdr";
-                if (cam::develop_to_hdr(r, out)) jni::session_record_file(out);
-            } else {            // RAW_BRACKET / RAW_MERGED -> merged DNG
-                const std::string out = base + ".dng";
-                if (hdr::write_merged_dng(r, out)) jni::session_record_file(out);
-            }
+            const std::string out = base + ".dng";
+            if (hdr::write_merged_dng(r, out)) jni::session_record_file(out);
         });
 }
 
@@ -261,12 +255,14 @@ bool Recorder::start_preview(Renderer* renderer) {
             if (neutral) { for (int i = 0; i < 3; ++i) m.as_shot_neutral[i] = neutral[i]; m.has_neutral = true; }
             if (black)   { for (int i = 0; i < 4; ++i) m.black_level[i] = black[i]; }
             if (white > 0) m.white_level = white;
-            // 1) Write this exposure's source DNG only in RAW_BRACKET mode (the
-            //    other modes keep just the merged output). Register it for the
-            //    result list only when it is actually written.
-            if (photo_output_mode_.load() == 0 /*RAW_BRACKET*/) {
+            // 1) Write the per-shot DNG when it's a kept output: the single FAST
+            //    DNG (mode 0), or the source DNGs of "Static + RAW set" (mode 2).
+            //    Static-merged (mode 1) keeps only the merged DNG. Register only
+            //    files actually written.
+            const int pm = photo_output_mode_.load();
+            if (pm == 0 /*FAST*/ || pm == 2 /*STATIC + RAW set*/) {
                 if (dng::write_dng(path, data, m)) jni::session_record_file(path);
-                else LOGE("Failed to write bracketed DNG: %s", path);
+                else LOGE("Failed to write still DNG: %s", path);
             }
             // 2) Accumulate for the merge; produces the merged output when complete.
             accumulate_bracket(path, data, w, h, stride, neutral, black, white,
@@ -505,11 +501,13 @@ int Recorder::finalize_percent() const {
 
 bool Recorder::take_photo(const std::string& output_path) {
     if (!jni_ready_ || state_ == State::IDLE) return false;
-    // Java appends "_<index>.dng" per bracketed frame; strip our ".dng" suffix.
+    // Java appends the per-frame suffix; strip our ".dng".
     std::string base = output_path;
     auto dot = base.rfind(".dng");
     if (dot != std::string::npos) base.erase(dot);
-    jni::hdr_take_photo(base.c_str());
+    // FAST = single raw shot; STATIC modes = 3-shot exposure bracket.
+    const int shots = (photo_output_mode_.load() == 0 /*FAST*/) ? 1 : 3;
+    jni::hdr_take_photo(base.c_str(), shots);
     return true;
 }
 
