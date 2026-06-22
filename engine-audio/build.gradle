@@ -1,0 +1,27 @@
+plugins {
+    id 'com.android.library'
+}
+
+// Thin wrapper that publishes audio_engine's Java (com.nerio.audioengine) as its
+// own Maven coordinate. A host app that also uses audio_engine can depend on this
+// same coordinate so Gradle keeps a single copy (no "Duplicate class" at merge).
+// The audio *native* lives in libcamera_recorder.so (built by :camera), not here.
+android {
+    namespace 'com.nerio.audioengine'
+    compileSdk 37
+
+    defaultConfig {
+        minSdk 26
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += ['../libs/audio_engine/src/main/java']
+        }
+    }
+}

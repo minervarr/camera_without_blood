@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- CAMERA/RECORD_AUDIO/FOREGROUND_SERVICE*/WAKE_LOCK and the camera +
+         RecordingService components are contributed by the :camera library
+         manifest and merged in automatically. -->
+
+    <application
+        android:label="Camera Demo"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.Material.Light">
+
+        <activity
+            android:name=".DemoLauncherActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

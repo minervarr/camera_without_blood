@@ -51,7 +51,9 @@ if ($SkipOnnx) {
 }
 
 # --- 3. gradle ---------------------------------------------------------------
-$task = if ($Release) { "assembleRelease" } else { "assembleDebug" }
+# The installable app is now the thin :demo module (it depends on the :camera
+# library, which builds libcamera_recorder.so + packages the assets/.aar).
+$task = if ($Release) { ":demo:assembleRelease" } else { ":demo:assembleDebug" }
 Write-Host "==> [3/3] gradle $task" -ForegroundColor Cyan
 $gradlew = Join-Path $root "gradlew.bat"
 if (Test-Path $gradlew) {
@@ -64,7 +66,7 @@ if (Test-Path $gradlew) {
 if ($LASTEXITCODE -ne 0) { throw "gradle $task failed" }
 
 # --- done --------------------------------------------------------------------
-$apkDir = if ($Release) { "app/build/outputs/apk/release" } else { "app/build/outputs/apk/debug" }
+$apkDir = if ($Release) { "demo/build/outputs/apk/release" } else { "demo/build/outputs/apk/debug" }
 Write-Host ""
 Write-Host "BUILD COMPLETE." -ForegroundColor Green
 $apk = Get-ChildItem -Path (Join-Path $root $apkDir) -Filter *.apk -ErrorAction SilentlyContinue | Select-Object -First 1

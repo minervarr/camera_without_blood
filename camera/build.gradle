@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'io.nava.camera'
+    compileSdk 37
+    ndkVersion '29.0.14206865'
+
+    defaultConfig {
+        minSdk 26
+        // No applicationId / targetSdk / versionCode: this is a library. The host
+        // app governs targetSdk at runtime. Output is written to the host's
+        // app-specific dir (CameraActivity.cameraOutputDir → getExternalFilesDir),
+        // which is scoped-storage-safe regardless of the host's targetSdk.
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+                abiFilters 'arm64-v8a'   // single-ABI: the .aar ships arm64-v8a only
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            consumerProguardFiles 'consumer-rules.pro'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+        }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // audio_engine's Java is exposed as its own coordinate so a host that also
+    // uses it gets a single copy (Gradle dedup). The audio *native* (usb_audio +
+    // libusb) is still compiled into libcamera_recorder.so by CMake.
+    api project(':engine-audio')
+    // archive_engine Java is intentionally NOT a dependency: it was unused
+    // (native archive is the local cpp/archive.cc).
+}

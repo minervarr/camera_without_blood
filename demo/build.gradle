@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Thin reference app: a launcher screen that opens the embeddable camera scene
+// (the :camera library) and prints the captured files it returns. This is also
+// the installable build used for on-device verification.
+android {
+    namespace 'io.nava.camera.demo'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId 'io.nava.camera.demo'
+        minSdk 26
+        // Kept at 28 to match the camera's device-verified behavior. (Output goes
+        // to getExternalFilesDir, so this does not depend on legacy storage; a
+        // modern host targetSdk works too.)
+        targetSdk 28
+        versionCode 1
+        versionName '0.1.0'
+        // The camera native lib is arm64-v8a only, so the app must match.
+        ndk { abiFilters 'arm64-v8a' }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation project(':camera')
+}

@@ -15,4 +15,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "camera_without_blood"
-include ':app'
+include ':camera'        // the embeddable camera library (produces the .aar)
+include ':engine-audio'  // audio_engine Java, as a standalone coordinate (dedup)
+include ':demo'          // thin reference app that launches the camera scene
