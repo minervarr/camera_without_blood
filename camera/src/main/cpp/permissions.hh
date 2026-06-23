@@ -2,60 +2,25 @@
 #include <jni.h>
 #include <android_native_app_glue.h>
 
-#include "logger.hh"
+#include "jni_util.hh"  // vce::platform::jni::env_for() + check_exc() (canvas lib)
 
 // ---------------------------------------------------------------------------
-// Runtime permission helpers for a pure-NativeActivity app (no Java UI).
-//
-// IMPORTANT JNI rules honoured here:
-//  * The android_main glue thread is attached to the JVM ONCE and left
-//    attached for the lifetime of the thread. Attaching/detaching on every
-//    call is unnecessary and detaching a thread that later does more JNI work
-//    is a common source of crashes.
-//  * Every JNI call that can raise is followed by an exception check. A
-//    pending (uncleared) exception makes the *next* JNI call abort the whole
-//    process -- which manifests as an instant "black screen".
+// App-specific runtime permission checks for this camera recorder. The generic
+// JNI substrate (thread-attach + exception checks) now lives in the canvas
+// library as vce::platform::jni; this header only owns the permission *list*
+// this app requires (CAMERA / RECORD_AUDIO / WRITE_EXTERNAL_STORAGE).
 // ---------------------------------------------------------------------------
-
-namespace perm {
-
-// Attach the calling (glue) thread once and reuse the env. Never detached.
-inline JNIEnv* env_for(android_app* app) {
-    JNIEnv* env = nullptr;
-    JavaVM* vm  = app->activity->vm;
-    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
-        return env;
-    }
-    if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
-        LOGE("permissions: AttachCurrentThread failed");
-        return nullptr;
-    }
-    return env;
-}
-
-// Clears any pending exception so it cannot poison subsequent JNI calls.
-inline bool check_exc(JNIEnv* env, const char* where) {
-    if (env->ExceptionCheck()) {
-        LOGE("permissions: JNI exception at %s", where);
-        env->ExceptionDescribe();
-        env->ExceptionClear();
-        return true;
-    }
-    return false;
-}
-
-} // namespace perm
 
 // Returns true only if every permission the app needs is already granted.
 inline bool has_permissions(android_app* app) {
-    JNIEnv* env = perm::env_for(app);
+    JNIEnv* env = vce::platform::jni::env_for(app);
     if (!env) return false;
 
     jobject activity = app->activity->clazz;
     jclass  cls      = env->GetObjectClass(activity);
     jmethodID check  = env->GetMethodID(cls, "checkSelfPermission",
                                         "(Ljava/lang/String;)I");
-    if (perm::check_exc(env, "GetMethodID(checkSelfPermission)") || !check) {
+    if (vce::platform::jni::check_exc(env, "GetMethodID(checkSelfPermission)") || !check) {
         return false;
     }
 
@@ -70,7 +35,7 @@ inline bool has_permissions(android_app* app) {
         jstring s = env->NewStringUTF(name);
         jint    r = env->CallIntMethod(activity, check, s);
         env->DeleteLocalRef(s);
-        if (perm::check_exc(env, "checkSelfPermission")) { all_granted = false; break; }
+        if (vce::platform::jni::check_exc(env, "checkSelfPermission")) { all_granted = false; break; }
         if (r != 0 /* PERMISSION_GRANTED */) { all_granted = false; }
     }
 
@@ -84,7 +49,7 @@ inline bool has_permissions(android_app* app) {
 inline void request_permissions(android_app* app) {
     if (has_permissions(app)) return;
 
-    JNIEnv* env = perm::env_for(app);
+    JNIEnv* env = vce::platform::jni::env_for(app);
     if (!env) return;
 
     jobject activity = app->activity->clazz;
@@ -92,7 +57,7 @@ inline void request_permissions(android_app* app) {
 
     jmethodID request = env->GetMethodID(cls, "requestPermissions",
                                          "([Ljava/lang/String;I)V");
-    if (perm::check_exc(env, "GetMethodID(requestPermissions)") || !request) {
+    if (vce::platform::jni::check_exc(env, "GetMethodID(requestPermissions)") || !request) {
         env->DeleteLocalRef(cls);
         return;
     }
@@ -107,7 +72,7 @@ inline void request_permissions(android_app* app) {
     env->SetObjectArrayElement(arr, 2, p2);
 
     env->CallVoidMethod(activity, request, arr, 123);
-    perm::check_exc(env, "requestPermissions");
+    vce::platform::jni::check_exc(env, "requestPermissions");
 
     env->DeleteLocalRef(p0);
     env->DeleteLocalRef(p1);

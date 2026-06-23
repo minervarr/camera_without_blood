@@ -71,5 +71,5 @@ private:
     // for the standalone demo.
     std::string out_base_;
 
-    Orientation orientation_;
+    vce::platform::Orientation orientation_;
 };

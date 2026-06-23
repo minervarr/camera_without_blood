@@ -96,26 +96,16 @@ set(NCNN_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
 set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
 add_subdirectory(${LIBS_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
 
-# ── Shader compilation (slangc required from Vulkan SDK) ──────────────────────
-set(SLANGC         "C:/VulkanSDK/1.4.341.1/Bin/slangc.exe")
-set(SHADER_SRC_DIR ${FONT_DIR}/shaders_src)
+# ── Shader compilation (slangc from Vulkan SDK) ───────────────────────────────
+# Reusable Slang→SPIR-V helper provided by the canvas library. Override the
+# compiler path with -DVCE_SLANGC=/path/to/slangc if the Vulkan SDK is elsewhere.
+include(${LIBS_DIR}/vulkan_canvas_engine/cmake/VceShaders.cmake)
+
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../assets/shaders)
 
-file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
-
-foreach(SHADER composite_vert composite_frag tiling coverage overlay_vert overlay_frag)
-    add_custom_command(
-        OUTPUT  ${SHADER_OUT_DIR}/${SHADER}.spv
-        COMMAND ${SLANGC} ${SHADER_SRC_DIR}/${SHADER}.slang
-                          -o ${SHADER_OUT_DIR}/${SHADER}.spv
-                          -target spirv
-        DEPENDS ${SHADER_SRC_DIR}/${SHADER}.slang
-        COMMENT "Compiling ${SHADER}.slang"
-    )
-    list(APPEND SPIRV_OUTPUTS ${SHADER_OUT_DIR}/${SHADER}.spv)
-endforeach()
-
-add_custom_target(compile_shaders ALL DEPENDS ${SPIRV_OUTPUTS})
+# The canvas/font engine's own shaders, compiled from the library's source tree.
+vce_compile_slang(compile_shaders ${SHADER_OUT_DIR} ${FONT_DIR}/shaders_src
+    composite_vert composite_frag tiling coverage overlay_vert overlay_frag)
 
 # ── Main shared library ───────────────────────────────────────────────────────
 add_library(camera_recorder SHARED
@@ -132,17 +122,17 @@ add_library(camera_recorder SHARED
     camera/hdr_merge.cc
     camera/mtb_align.cc
 
-    # ISP (Video Pipeline)
+    # ISP (Video Pipeline) — compute context now lives in the canvas lib
     isp/ai_denoiser.cc
     isp/frame_store.cc
     isp/raw_video_pipeline.cc
-    isp/vk_compute.cc
+    ${CANVAS_DIR}/cpp/compute_context.cc
 
     # JNI bridge to the Java HDR camera session
     jni/jni_camera.cc
 
-    # Device orientation (accelerometer)
-    orientation.cc
+    # Device orientation (accelerometer) — now lives in the canvas lib
+    ${CANVAS_DIR}/cpp/orientation.cc
 
     # Audio capture (DAC/USB)
     audio/audio_capture.cc

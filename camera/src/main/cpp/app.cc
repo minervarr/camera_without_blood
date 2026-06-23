@@ -91,7 +91,7 @@ void App::run() {
         while ((ident = ALooper_pollOnce(timeout_ms, nullptr, &events,
                                 reinterpret_cast<void**>(&source))) >= 0) {
             if (source) source->process(state_, source);
-            if (ident == Orientation::LOOPER_ID) orientation_.handleEvents();
+            if (ident == vce::platform::Orientation::LOOPER_ID) orientation_.handleEvents();
             if (state_->destroyRequested) return;
             timeout_ms = 0;  // drain any remaining events without blocking
         }
@@ -338,7 +338,7 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             if (!app->window) break;
             // Hide the status bar.
-            enable_immersive(app);
+            vce::platform::enable_immersive(app);
             // Always bring up Vulkan/UI so something is on screen immediately.
             self->permissions_granted_ = has_permissions(app);
             if (!self->renderer_) {
@@ -355,7 +355,7 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
         case APP_CMD_GAINED_FOCUS:
             self->focused_ = true;
             // Re-apply status bar hide when focus returns.
-            enable_immersive(app);
+            vce::platform::enable_immersive(app);
             // The user may have just answered the permission dialog: re-check
             // and start the recorder if it is now allowed.
             if (!self->permissions_granted_) {
