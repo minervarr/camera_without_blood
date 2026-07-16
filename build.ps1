@@ -38,7 +38,7 @@ function Find-BuildPython {
 }
 
 # --- 2. ONNX Runtime .so -----------------------------------------------------
-$so = Join-Path $root "libs/onnxruntime/lib/arm64-v8a/libonnxruntime.so"
+$so = Join-Path $root "libs/thirdparty/onnxruntime/lib/arm64-v8a/libonnxruntime.so"
 if ($SkipOnnx) {
   Write-Host "==> [2/3] ONNX Runtime build skipped (-SkipOnnx)" -ForegroundColor DarkGray
 } elseif (Test-Path $so) {

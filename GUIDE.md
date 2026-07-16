@@ -13,11 +13,11 @@ The name reflects the philosophy: get close to the hardware without the mess tha
 
 **This is the most important rule of this project.**
 
-All shared libraries (`vulkan_canvas_engine`, `audio_engine`, `archive_engine`, etc.) are live, reusable codebases. Whenever this project exposes a gap, missing feature, or improvement opportunity in one of those libraries, **the fix goes into the library itself** — not into workaround code here.
+All shared libraries (`Vk_Canvas_Lb_LAW`, `audio_engine`, `archive_engine`, etc.) are live, reusable codebases. Whenever this project exposes a gap, missing feature, or improvement opportunity in one of those libraries, **the fix goes into the library itself** — not into workaround code here.
 
 This means:
 - If the camera recorder needs a new capability from `audio_engine` (e.g. a better capture buffer, FLAC integration, new format support), implement it in `audio_engine` and commit it there.
-- If the Vulkan canvas needs a new widget or layout primitive, add it to `vulkan_canvas_engine`.
+- If the Vulkan canvas needs a new widget or layout primitive, add it to `Vk_Canvas_Lb_LAW`.
 - Every improvement made here automatically benefits every other project that uses those libraries.
 
 The programmer working on this project is expected to contribute back to the library repos as part of the work, not just consume them.
@@ -37,7 +37,7 @@ The programmer working on this project is expected to contribute back to the lib
 ```
 android_main()
     └── App          (lifecycle: init/destroy Vulkan, main loop)
-         ├── Renderer + Canvas    (Vulkan UI, from vulkan_canvas_engine)
+         ├── Renderer + Canvas    (Vulkan UI, from Vk_Canvas_Lb_LAW)
          ├── UI                   (draws Record/Stop button, timer)
          └── Recorder             (orchestrates everything)
               ├── Camera          (Camera2 NDK — raw frames)
@@ -105,7 +105,7 @@ All external code lives in `libs/`. These are **shared libraries** that exist in
 
 | Submodule | Purpose | Repo |
 |-----------|---------|------|
-| `vulkan_canvas_engine` | Vulkan-based 2D UI canvas + font rendering | github.com/minervarr/vulkan_canvas_engine |
+| `Vk_Canvas_Lb_LAW` | Vulkan-based 2D UI canvas + font rendering | github.com/minervarr/Vk_Canvas_Lb_LAW |
 | `vulkan_font_engine` | Nested inside canvas engine — GPU font via FreeType + MSDF | github.com/minervarr/vulkan_font_engine |
 | `audio_engine` | Bitperfect USB DAC access — playback + capture, FLAC | github.com/minervarr/audio_engine |
 | `archive_engine` | Android file I/O helper (compress/extract via Android APIs) | github.com/minervarr/archive_engine |
@@ -208,7 +208,7 @@ libFLAC is integrated directly in `audio/audio_capture.cc`. The capture loop acc
 #### 5. Touch input → UI actions (`ui/ui.cc`)
 The Record and Stop buttons are drawn but not wired to touch events.
 Must implement:
-- Add `input_handler` from `vulkan_canvas_engine` to the build
+- Add `input_handler` from `Vk_Canvas_Lb_LAW` to the build
 - Route `AInputEvent` from the main loop to `InputHandler`
 - On tap of Record button → `recorder_.start(output_path)`
 - On tap of Stop button → `recorder_.stop()`

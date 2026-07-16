@@ -1,32 +1,31 @@
-[submodule "libs/vulkan_canvas_engine"]
-	path = libs/vulkan_canvas_engine
-	url = https://github.com/minervarr/vulkan_canvas_engine
-
 [submodule "libs/archive_engine"]
-	path = libs/archive_engine
+	path = libs/firstparty/archive_engine
 	url = https://github.com/minervarr/archive_engine
 
 [submodule "libs/audio_engine"]
-	path = libs/audio_engine
+	path = libs/firstparty/audio_engine
 	url = https://github.com/minervarr/audio_engine
 
 [submodule "libs/regen_atlas"]
-	path = libs/regen_atlas
+	path = libs/firstparty/regen_atlas
 	url = https://github.com/minervarr/regen_atlas
 
 [submodule "libs/libebml"]
-	path = libs/libebml
+	path = libs/thirdparty/libebml
 	url = https://github.com/Matroska-Org/libebml
 
 [submodule "libs/libmatroska"]
-	path = libs/libmatroska
+	path = libs/thirdparty/libmatroska
 	url = https://github.com/Matroska-Org/libmatroska
 [submodule "libs/flac"]
-	path = libs/flac
+	path = libs/thirdparty/flac
 	url = https://github.com/xiph/flac
 [submodule "libs/ncnn"]
-	path = libs/ncnn
+	path = libs/thirdparty/ncnn
 	url = https://github.com/Tencent/ncnn.git
 [submodule "libs/rnnoise"]
-	path = libs/rnnoise
+	path = libs/thirdparty/rnnoise
 	url = https://github.com/xiph/rnnoise.git
+[submodule "libs/firstparty/Vk_Canvas_Lb_LAW"]
+	path = libs/firstparty/Vk_Canvas_Lb_LAW
+	url = https://github.com/minervarr/Vk_Canvas_Lb_LAW

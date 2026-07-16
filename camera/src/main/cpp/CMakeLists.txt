@@ -8,27 +8,26 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(ROOT_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/../../../..)
 set(LIBS_DIR     ${ROOT_DIR}/libs)
 
-set(CANVAS_DIR   ${LIBS_DIR}/vulkan_canvas_engine/app/src/main)
-set(FONT_DIR     ${LIBS_DIR}/vulkan_canvas_engine/vulkan_font_engine/app/src/main)
-set(AUDIO_DIR    ${LIBS_DIR}/audio_engine/src/main/cpp)
-set(ARCHIVE_DIR  ${LIBS_DIR}/archive_engine/src/main/cpp)
+# First-party libraries (minervarr repos)
+set(FIRSTPARTY_DIR ${LIBS_DIR}/firstparty)
+set(CANVAS_DIR     ${FIRSTPARTY_DIR}/Vk_Canvas_Lb_LAW)
+set(AUDIO_DIR      ${FIRSTPARTY_DIR}/audio_engine/src/main/cpp)
+set(ARCHIVE_DIR    ${FIRSTPARTY_DIR}/archive_engine/src/main/cpp)
+
+# Third-party libraries
+set(THIRDPARTY_DIR ${LIBS_DIR}/thirdparty)
 
 set(NATIVE_GLUE  ${ANDROID_NDK}/sources/android/native_app_glue)
 
-# ── FreeType ──────────────────────────────────────────────────────────────────
-set(FT_DISABLE_ZLIB      ON CACHE BOOL "" FORCE)
-set(FT_DISABLE_BZIP2     ON CACHE BOOL "" FORCE)
-set(FT_DISABLE_PNG       ON CACHE BOOL "" FORCE)
-set(FT_DISABLE_HARFBUZZ  ON CACHE BOOL "" FORCE)
-set(FT_DISABLE_BROTLI    ON CACHE BOOL "" FORCE)
-add_subdirectory(${FONT_DIR}/freetype ${CMAKE_BINARY_DIR}/freetype)
+# ── Vk_Canvas_Lb_LAW (canvas + font engine) ──────────────────────────────────
+add_subdirectory(${CANVAS_DIR}/core ${CMAKE_BINARY_DIR}/vk_canvas_core)
 
 # --- KissFFT ---
 add_library(kiss_fft STATIC
-    ${LIBS_DIR}/kiss_fft/kiss_fft.c
-    ${LIBS_DIR}/kiss_fft/kiss_fftr.c
+    ${THIRDPARTY_DIR}/kiss_fft/kiss_fft.c
+    ${THIRDPARTY_DIR}/kiss_fft/kiss_fftr.c
 )
-target_include_directories(kiss_fft PUBLIC ${LIBS_DIR}/kiss_fft)
+target_include_directories(kiss_fft PUBLIC ${THIRDPARTY_DIR}/kiss_fft)
 target_compile_definitions(kiss_fft PRIVATE FLOATING_POINT USE_KISS_FFT EXPORT=)
 target_compile_options(kiss_fft PRIVATE -Wno-unused-parameter -Wno-sign-compare)
 
@@ -37,11 +36,11 @@ set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-add_subdirectory(${LIBS_DIR}/soxr ${CMAKE_BINARY_DIR}/soxr)
-target_include_directories(soxr PUBLIC ${LIBS_DIR}/soxr/src)
+add_subdirectory(${THIRDPARTY_DIR}/soxr ${CMAKE_BINARY_DIR}/soxr)
+target_include_directories(soxr PUBLIC ${THIRDPARTY_DIR}/soxr/src)
 
 # --- ONNX Runtime ---
-set(ONNXRUNTIME_DIR ${LIBS_DIR}/onnxruntime)
+set(ONNXRUNTIME_DIR ${THIRDPARTY_DIR}/onnxruntime)
 add_library(onnxruntime SHARED IMPORTED)
 set_target_properties(onnxruntime PROPERTIES IMPORTED_LOCATION
     ${ONNXRUNTIME_DIR}/lib/${ANDROID_ABI}/libonnxruntime.so
@@ -78,34 +77,40 @@ set(BUILD_TESTING       OFF CACHE BOOL "" FORCE)
 set(BUILD_DOCS          OFF CACHE BOOL "" FORCE)
 set(WITH_OGG            OFF CACHE BOOL "" FORCE)
 set(INSTALL_MANPAGES    OFF CACHE BOOL "" FORCE)
-add_subdirectory(${LIBS_DIR}/flac ${CMAKE_BINARY_DIR}/flac)
+add_subdirectory(${THIRDPARTY_DIR}/flac ${CMAKE_BINARY_DIR}/flac)
 
 # ── libebml ───────────────────────────────────────────────────────────────────
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-add_subdirectory(${LIBS_DIR}/libebml    ${CMAKE_BINARY_DIR}/libebml)
+add_subdirectory(${THIRDPARTY_DIR}/libebml    ${CMAKE_BINARY_DIR}/libebml)
 add_library(EBML::ebml ALIAS ebml)
 
 # ── libmatroska ───────────────────────────────────────────────────────────────
 set(CMAKE_DISABLE_FIND_PACKAGE_EBML ON)
-add_subdirectory(${LIBS_DIR}/libmatroska ${CMAKE_BINARY_DIR}/libmatroska)
+add_subdirectory(${THIRDPARTY_DIR}/libmatroska ${CMAKE_BINARY_DIR}/libmatroska)
 
-#  NCNN 
+#  NCNN
 set(NCNN_VULKAN ON CACHE BOOL "" FORCE)
 set(NCNN_DISABLE_EXCEPTION OFF CACHE BOOL "" FORCE)
 set(NCNN_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
 set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
-add_subdirectory(${LIBS_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
+add_subdirectory(${THIRDPARTY_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
 
 # ── Shader compilation (slangc from Vulkan SDK) ───────────────────────────────
 # Reusable Slang→SPIR-V helper provided by the canvas library. Override the
 # compiler path with -DVCE_SLANGC=/path/to/slangc if the Vulkan SDK is elsewhere.
-include(${LIBS_DIR}/vulkan_canvas_engine/cmake/VceShaders.cmake)
+include(${CANVAS_DIR}/cmake/VceShaders.cmake)
 
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../assets/shaders)
 
-# The canvas/font engine's own shaders, compiled from the library's source tree.
-vce_compile_slang(compile_shaders ${SHADER_OUT_DIR} ${FONT_DIR}/shaders_src
-    composite_vert composite_frag tiling coverage overlay_vert overlay_frag)
+# The canvas/font engine's shaders.
+# Font engine shaders (composite/tiling/coverage) from vulkan_font_engine.
+vce_compile_slang(compile_font_shaders ${SHADER_OUT_DIR}
+    ${CANVAS_DIR}/first_party/vulkan_font_engine/shaders_src
+    composite_vert composite_frag tiling coverage)
+# Canvas engine shaders (overlay/image) from Vk_Canvas_Lb_LAW.
+vce_compile_slang(compile_canvas_shaders ${SHADER_OUT_DIR}
+    ${CANVAS_DIR}/shaders_src
+    overlay_vert overlay_frag image_vert image_frag shape_vert shape_frag)
 
 # ── Main shared library ───────────────────────────────────────────────────────
 add_library(camera_recorder SHARED
@@ -122,17 +127,17 @@ add_library(camera_recorder SHARED
     camera/hdr_merge.cc
     camera/mtb_align.cc
 
-    # ISP (Video Pipeline) — compute context now lives in the canvas lib
+    # ISP (Video Pipeline) — compute_context is WIP in canvas lib, compiled here
     isp/ai_denoiser.cc
     isp/frame_store.cc
     isp/raw_video_pipeline.cc
-    ${CANVAS_DIR}/cpp/compute_context.cc
+    ${CANVAS_DIR}/core/compute_context.cc
 
     # JNI bridge to the Java HDR camera session
     jni/jni_camera.cc
 
-    # Device orientation (accelerometer) — now lives in the canvas lib
-    ${CANVAS_DIR}/cpp/orientation.cc
+    # Device orientation (accelerometer) — Android platform code from canvas lib
+    ${CANVAS_DIR}/platform/android/orientation.cc
 
     # Audio capture (DAC/USB)
     audio/audio_capture.cc
@@ -150,18 +155,6 @@ add_library(camera_recorder SHARED
     # UI (draws over Vulkan canvas)
     ui/ui.cc
 
-    # vulkan_canvas_engine sources (no app.cc/main.cc — we have our own)
-    ${CANVAS_DIR}/cpp/renderer.cc
-    ${CANVAS_DIR}/cpp/canvas.cc
-    ${CANVAS_DIR}/cpp/overlay.cc
-    ${CANVAS_DIR}/cpp/widgets.cc
-    ${CANVAS_DIR}/cpp/textarea.cc
-
-    # vulkan_font_engine sources
-    ${FONT_DIR}/cpp/font.cc
-    ${FONT_DIR}/cpp/glyphs.cc
-    ${FONT_DIR}/cpp/msdf.cc
-
     # audio_engine native sources (JNI wrappers excluded — we call C++ API directly)
     ${AUDIO_DIR}/usb_audio.cpp
 
@@ -172,28 +165,29 @@ add_library(camera_recorder SHARED
     ${NATIVE_GLUE}/android_native_app_glue.c
 )
 
-add_dependencies(camera_recorder compile_shaders)
+add_dependencies(camera_recorder compile_font_shaders compile_canvas_shaders)
 
 target_include_directories(camera_recorder PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-    ${CANVAS_DIR}/cpp
-    ${FONT_DIR}/cpp
-    ${FONT_DIR}/freetype/include
+    ${CANVAS_DIR}/core
+    ${CANVAS_DIR}/first_party/vulkan_font_engine/core
     ${AUDIO_DIR}
     ${LIBUSB_DIR}/libusb
     ${ARCHIVE_DIR}/archive/include
     ${ARCHIVE_DIR}/util/include
     ${NATIVE_GLUE}
-    ${LIBS_DIR}/libebml
-    ${LIBS_DIR}/libmatroska
-    ${LIBS_DIR}/flac/include
-    ${LIBS_DIR}/ncnn/src
+    ${THIRDPARTY_DIR}/libebml
+    ${THIRDPARTY_DIR}/libmatroska
+    ${THIRDPARTY_DIR}/flac/include
+    ${THIRDPARTY_DIR}/ncnn/src
 )
 
 target_compile_options(camera_recorder PRIVATE -O2)
 
 target_link_libraries(camera_recorder
+    # Canvas + Font engine (vk_canvas_core links vk_font_core which links freetype + msdfgen)
+    vk_canvas_core
     # AI Noise Reduction
     ncnn
     # Audio and DSP
@@ -201,8 +195,6 @@ target_link_libraries(camera_recorder
     kiss_fft
     soxr
     onnxruntime
-    # Font
-    freetype
     # Audio (USB capture + FLAC encoding)
     usb1
     # MKV

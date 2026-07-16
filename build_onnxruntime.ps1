@@ -1,15 +1,15 @@
 #!/usr/bin/env pwsh
 #
 # Build libonnxruntime.so (Android arm64-v8a) from source, to match the pinned
-# headers in libs/onnxruntime/include/ (ORT_API_VERSION 22 -> ONNX Runtime v1.22.0).
+# headers in libs/thirdparty/onnxruntime/include/ (ORT_API_VERSION 22 -> ONNX Runtime v1.22.0).
 #
-# Why this exists: libs/onnxruntime/lib/<abi>/libonnxruntime.so is a prebuilt that
+# Why this exists: libs/thirdparty/onnxruntime/lib/<abi>/libonnxruntime.so is a prebuilt that
 # is git-ignored (.gitignore: *.so), so a fresh clone has no .so and the native
 # link step fails with:
-#   ninja: error: '.../libs/onnxruntime/lib/arm64-v8a/libonnxruntime.so' ... missing
+#   ninja: error: '.../libs/thirdparty/onnxruntime/lib/arm64-v8a/libonnxruntime.so' ... missing
 # This script regenerates that .so from upstream source instead of copying a binary.
 #
-# Output: libs/onnxruntime/lib/<abi>/libonnxruntime.so
+# Output: libs/thirdparty/onnxruntime/lib/<abi>/libonnxruntime.so
 #
 # Usage (from either clone of the repo):
 #   ./build_onnxruntime.ps1                       # clone v1.22.0 + build + install
@@ -17,7 +17,7 @@
 #   ./build_onnxruntime.ps1 -Python C:\py312\python.exe   # pin a known-good interpreter
 #
 # Heads up: this is a heavy build (downloads ONNX Runtime + submodules, compiles
-# protobuf/abseil/onnx/eigen/..., ~30-90 min, several GB of disk/RAM).
+# protobuf/abseil/onnx/eigen/..., ~30-99 min, several GB of disk/RAM).
 
 [CmdletBinding()]
 param(
@@ -94,7 +94,7 @@ if (-not (Test-Path $Ndk)) { throw "Android NDK not found: $Ndk (set -Ndk)" }
 
 $buildPy = Join-Path $SrcDir "tools/ci_build/build.py"
 $buildDir = Join-Path $SrcDir "build/Android"
-$dest = Join-Path $PSScriptRoot "libs/onnxruntime/lib/$AndroidAbi"
+$dest = Join-Path $PSScriptRoot "libs/thirdparty/onnxruntime/lib/$AndroidAbi"
 
 Write-Host "ORT version : $OrtVersion"
 Write-Host "ABI / API   : $AndroidAbi / $AndroidApi"

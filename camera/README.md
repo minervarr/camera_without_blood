@@ -52,7 +52,7 @@ works regardless of the host's `targetSdk` and needs no storage permission. Pass
 
 ## Sharing engines across apps (avoiding duplicate classes)
 
-All the heavy native engines (vulkan_canvas_engine, ncnn, FreeType, libusb,
+All the heavy native engines (Vk_Canvas_Lb_LAW, ncnn, FreeType, libusb,
 flac, matroska, ONNX Runtime, …) are compiled into a single
 `libcamera_recorder.so` and sealed inside it — a host that also uses them
 natively keeps its own copy with **no conflict**.
