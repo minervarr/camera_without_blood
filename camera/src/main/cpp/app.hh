@@ -10,6 +10,8 @@
 
 class Renderer;
 class Canvas;
+class AndroidSurfaceProvider;
+class AndroidAssetReader;
 
 namespace ui  { class UI; }
 namespace rec { class Recorder; }
@@ -37,6 +39,8 @@ private:
     android_app* state_;
 
     Renderer*      renderer_  = nullptr;
+    AndroidSurfaceProvider* surface_provider_ = nullptr;
+    AndroidAssetReader*     asset_reader_    = nullptr;
     Font           overlay_font_;
     bool           font_loaded_ = false;
     std::vector<float> canvas_data_;

@@ -3,6 +3,7 @@
 #include <android/keycodes.h>
 #include "permissions.hh"
 #include "fullscreen.hh"
+#include "android_platform.hh"
 #include "renderer.hh"
 #include "canvas.hh"
 #include "ui/ui.hh"
@@ -122,10 +123,9 @@ void App::init_vulkan() {
     // window surface. It may be created and destroyed many times during the app's
     // life (surface destroyed/recreated on rotate, lock/unlock, lifecycle churn).
     // The camera/recorder is deliberately NOT tied to this lifecycle.
-    renderer_ = new Renderer(state_->window, state_->activity->assetManager);
-    // Let the camera callback thread wake this (main) thread's looper when a new
-    // frame arrives, so run() can present at the camera's cadence (see App::run).
-    renderer_->set_wake_looper(ALooper_forThread());
+    surface_provider_ = new AndroidSurfaceProvider(state_->window);
+    asset_reader_     = new AndroidAssetReader(state_->activity->assetManager);
+    renderer_ = new Renderer(*surface_provider_, *asset_reader_);
 
     // Load the overlay font once (used for the UI text). Not tied to the surface
     // lifecycle, so only load on the first init.
@@ -226,6 +226,8 @@ void App::destroy_vulkan() {
     delete ui_;       ui_       = nullptr;
     delete canvas_;   canvas_   = nullptr;
     delete renderer_; renderer_ = nullptr;
+    delete surface_provider_; surface_provider_ = nullptr;
+    delete asset_reader_;     asset_reader_     = nullptr;
     LOGI("Renderer/UI destroyed (camera left running)");
 }
 
@@ -338,7 +340,7 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             if (!app->window) break;
             // Hide the status bar.
-            vce::platform::enable_immersive(app);
+            vce::platform::enable_immersive(app, vce::platform::ImmersiveMode::kFullImmersive);
             // Always bring up Vulkan/UI so something is on screen immediately.
             self->permissions_granted_ = has_permissions(app);
             if (!self->renderer_) {
@@ -355,7 +357,7 @@ void App::handle_cmd(android_app* app, int32_t cmd) {
         case APP_CMD_GAINED_FOCUS:
             self->focused_ = true;
             // Re-apply status bar hide when focus returns.
-            vce::platform::enable_immersive(app);
+            vce::platform::enable_immersive(app, vce::platform::ImmersiveMode::kFullImmersive);
             // The user may have just answered the permission dialog: re-check
             // and start the recorder if it is now allowed.
             if (!self->permissions_granted_) {

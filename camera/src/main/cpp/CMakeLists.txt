@@ -139,6 +139,9 @@ add_library(camera_recorder SHARED
     # Device orientation (accelerometer) — Android platform code from canvas lib
     ${CANVAS_DIR}/platform/android/orientation.cc
 
+    # Android platform seam (SurfaceProvider, AssetReader, FrameWaker)
+    ${CANVAS_DIR}/platform/android/android_platform.cc
+
     # Audio capture (DAC/USB)
     audio/audio_capture.cc
 
@@ -171,6 +174,7 @@ target_include_directories(camera_recorder PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CANVAS_DIR}/core
+    ${CANVAS_DIR}/platform/android
     ${CANVAS_DIR}/first_party/vulkan_font_engine/core
     ${AUDIO_DIR}
     ${LIBUSB_DIR}/libusb
