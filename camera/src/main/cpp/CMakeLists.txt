@@ -4,16 +4,21 @@ project(camera_recorder)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── Paths ──────────────────────────────────────────────────────────────────────
-set(ROOT_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/../../../..)
-set(LIBS_DIR     ${ROOT_DIR}/libs)
+# ── Paths (relocatable) ────────────────────────────────────────────────────────
+# When used as a submodule, the host project sets CAMERA_ROOT before
+# add_subdirectory(). When built standalone (the demo), auto-detect.
+if(NOT DEFINED CAMERA_ROOT)
+    # Standalone: the camera repo root is 4 levels up from this CMakeLists.txt
+    set(CAMERA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../..)
+endif()
+
+set(LIBS_DIR     ${CAMERA_ROOT}/libs)
 
 # First-party libraries (minervarr repos)
 set(FIRSTPARTY_DIR ${LIBS_DIR}/firstparty)
 set(CANVAS_DIR     ${FIRSTPARTY_DIR}/Vk_Canvas_Lb_LAW)
 set(AUDIO_DIR      ${FIRSTPARTY_DIR}/audio_engine)
 set(APP_SHELL_DIR  ${FIRSTPARTY_DIR}/app_shell)
-
 
 # Third-party libraries
 set(THIRDPARTY_DIR ${LIBS_DIR}/thirdparty)
