@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# build.sh — build the camera library as part of this project.
+# build.sh — build the camera library.
 #
 # Usage:
-#   ./build.sh                  # debug build
-#   ./build.sh --release        # release build
-#   ./build.sh --install        # debug build + install on device
+#   ./build.sh                  # build camera .aar (debug)
+#   ./build.sh --release        # build camera .aar (release)
+#   ./build.sh --demo           # build + install demo APK (reference UI)
 #   ./build.sh --skip-onnx      # skip ONNX Runtime build
 #
+# The demo/ folder is reference-only (old UI example). --demo temporarily
+# enables it in settings.gradle, builds the APK, and reverts.
+#
 # Prerequisites:
-#   - Android SDK + NDK installed (ANDROID_HOME / ANDROID_NDK_HOME)
+#   - Android SDK + NDK installed
 #   - gradle wrapper (generated automatically if missing)
 #   - Submodules initialized: git submodule update --init --recursive
 #
@@ -19,13 +22,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 RELEASE=false
-INSTALL=false
+BUILD_DEMO=false
 SKIP_ONNX=false
 PYTHON=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --release)     RELEASE=true; shift ;;
-        --install)     INSTALL=true; shift ;;
+        --demo)        BUILD_DEMO=true; shift ;;
         --skip-onnx)   SKIP_ONNX=true; shift ;;
         --python)      PYTHON="$2"; shift 2 ;;
         -*)            echo "Unknown option: $1"; exit 1 ;;
@@ -62,15 +65,30 @@ else
 fi
 
 # ── 2. Gradle ───────────────────────────────────────────────────────────────
-if $RELEASE; then
-    TASK=":camera:assembleRelease"
-elif $INSTALL; then
-    TASK=":demo:installDebug"
-else
+# Enable demo module temporarily if --demo was passed
+if $BUILD_DEMO; then
+    if grep -q "// DEMO placeholder" "$ROOT/settings.gradle"; then
+        echo "==> enabling demo module in settings.gradle"
+        sed -i "s|// DEMO placeholder.*|include ':demo'          // thin reference app (old UI, not compiled by default)|" "$ROOT/settings.gradle"
+        REVERT_DEMO=true
+    fi
+fi
+
+if $BUILD_DEMO; then
     TASK=":demo:assembleDebug"
+elif $RELEASE; then
+    TASK=":camera:assembleRelease"
+else
+    TASK=":camera:assembleDebug"
 fi
 echo "==> [2/2] gradle ${TASK}"
 "$ROOT/gradlew" "$TASK"
+
+# Revert demo inclusion
+if ${REVERT_DEMO:-false}; then
+    echo "==> disabling demo module in settings.gradle"
+    sed -i "s|include ':demo'.*|// DEMO placeholder — build.sh swaps this for \"include ':demo'\" then reverts|" "$ROOT/settings.gradle"
+fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
