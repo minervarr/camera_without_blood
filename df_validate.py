@@ -12,7 +12,7 @@ import onnxruntime as ort
 import soundfile as sf
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-MODELS = os.path.join(ROOT, "app/src/main/assets/models/tmp/export")
+MODELS = os.path.join(ROOT, "camera/src/main/assets/models/tmp/export")
 OUT = os.path.join(ROOT, "tmp_df_golden")
 os.makedirs(OUT, exist_ok=True)
 

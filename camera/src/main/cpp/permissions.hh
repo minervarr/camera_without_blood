@@ -3,6 +3,7 @@
 #include <android_native_app_glue.h>
 
 #include "jni_util.hh"  // vce::platform::jni::env_for() + check_exc() (canvas lib)
+#include "host.hh"
 
 // ---------------------------------------------------------------------------
 // App-specific runtime permission checks for this camera recorder. The generic
@@ -43,6 +44,12 @@ inline bool has_permissions(android_app* app) {
     return all_granted;
 }
 
+// Host-based overload: extracts android_app* from the Host's nativeApp().
+inline bool has_permissions(Host* host) {
+    auto* app = static_cast<android_app*>(host->nativeApp());
+    return app ? has_permissions(app) : false;
+}
+
 // Fires the system permission dialog. Safe to call repeatedly; it no-ops if
 // everything is already granted. The grant result is observed by polling
 // has_permissions() once focus returns (see App::handle_cmd).
@@ -80,4 +87,10 @@ inline void request_permissions(android_app* app) {
     env->DeleteLocalRef(arr);
     env->DeleteLocalRef(str_cls);
     env->DeleteLocalRef(cls);
+}
+
+// Host-based overload: extracts android_app* from the Host's nativeApp().
+inline void request_permissions(Host* host) {
+    auto* app = static_cast<android_app*>(host->nativeApp());
+    if (app) request_permissions(app);
 }

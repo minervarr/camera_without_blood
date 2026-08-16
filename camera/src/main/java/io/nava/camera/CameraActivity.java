@@ -1,19 +1,20 @@
 package io.nava.camera;
 
-import android.app.NativeActivity;
 import android.content.Intent;
 
 import java.io.File;
 
+import io.nava.appshell.AppShellActivity;
+
 /**
- * The embeddable camera scene. A {@link NativeActivity} whose C++ side owns the
- * Vulkan UI and capture pipeline; this subclass adds the host integration:
+ * The embeddable camera scene. An {@link AppShellActivity} whose C++ side owns
+ * the Vulkan UI and capture pipeline; this subclass adds the host integration:
  * launch options (output dir, initial mode) and a result handed back when the
  * user backs out.
  *
  * <p>Launch it via {@link CameraLauncher}; do not reference it directly.
  */
-public class CameraActivity extends NativeActivity {
+public class CameraActivity extends AppShellActivity {
 
     // A NativeActivity loads the native lib via the manifest android.app.lib_name,
     // but that path does NOT register explicitly-declared native methods or make

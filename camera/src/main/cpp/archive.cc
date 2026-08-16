@@ -1,6 +1,4 @@
 #include "archive.hh"
-#include <jni.h>
-#include <android_native_app_glue.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -23,11 +21,12 @@ static bool create_dir_recursive(const std::string& path) {
     return true;
 }
 
-std::string get_documents_path(android_app* app, const std::string& subfolder) {
-    if (!app || !app->activity || !app->activity->vm) return "";
+std::string get_documents_path(JavaVM* vm, jobject activity,
+                               const std::string& subfolder) {
+    if (!vm || !activity) return "";
 
     JNIEnv* env = nullptr;
-    app->activity->vm->AttachCurrentThread(&env, nullptr);
+    vm->AttachCurrentThread(&env, nullptr);
     if (!env) return "";
 
     jclass envClass = env->FindClass("android/os/Environment");
@@ -50,7 +49,7 @@ std::string get_documents_path(android_app* app, const std::string& subfolder) {
     std::string path(pathChars);
     env->ReleaseStringUTFChars(pathStr, pathChars);
 
-    app->activity->vm->DetachCurrentThread();
+    vm->DetachCurrentThread();
 
     if (!subfolder.empty()) {
         path += "/" + subfolder;

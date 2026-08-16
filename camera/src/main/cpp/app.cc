@@ -1,8 +1,6 @@
 #include "app.hh"
 #include <android/asset_manager.h>
-#include <android/keycodes.h>
 #include "permissions.hh"
-#include "fullscreen.hh"
 #include "android_platform.hh"
 #include "renderer.hh"
 #include "canvas.hh"
@@ -19,26 +17,31 @@
 #undef LOG_TAG
 #define LOG_TAG "CameraApp"
 
-App::App(android_app* state) : state_(state) {
-    state_->userData = this;
-    state_->onAppCmd = handle_cmd;
-    state_->onInputEvent = handle_input;
+// Orientation sensor looper ID: must be >4 to avoid colliding with
+// AndroidHost's eventFd(3) and timerFd(4).
+static constexpr int kOrientationLooperId = 5;
+
+App::App(std::unique_ptr<Host> host) : host_(std::move(host)) {
     // Embedded-scene launch options from the host CameraActivity (safe no-ops
     // under a plain NativeActivity). Start each scene with a clean capture list.
+    JavaVM* vm   = host_->javaVm();
+    jobject act  = static_cast<jobject>(host_->activityObject());
     jni::session_files_reset();
-    ui_video_mode_ = jni::host_start_video(state_->activity->vm, state_->activity->clazz);
-    ui_photo_mode_ = jni::host_photo_mode(state_->activity->vm, state_->activity->clazz);
-    ui_photo_mode_ui_enabled_ = jni::host_photo_mode_ui(state_->activity->vm, state_->activity->clazz);
-    orientation_.start();  // sensor queue on this (glue) thread's looper
+    ui_video_mode_         = jni::host_start_video(vm, act);
+    ui_photo_mode_         = jni::host_photo_mode(vm, act);
+    ui_photo_mode_ui_enabled_ = jni::host_photo_mode_ui(vm, act);
+    orientation_.start(kOrientationLooperId);
 }
 
 const std::string& App::output_base() {
     if (out_base_.empty()) {
+        JavaVM* vm  = host_->javaVm();
+        jobject act = static_cast<jobject>(host_->activityObject());
         // Host-provided, scoped-storage-safe dir (CameraActivity.cameraOutputDir).
-        out_base_ = jni::host_output_dir(state_->activity->vm, state_->activity->clazz);
+        out_base_ = jni::host_output_dir(vm, act);
         // Fallback for a non-CameraActivity host: legacy public Documents.
         if (out_base_.empty()) {
-            out_base_ = archive::get_documents_path(state_, "camera_without_blood");
+            out_base_ = archive::get_documents_path(vm, act, "camera_without_blood");
         }
     }
     return out_base_;
@@ -59,8 +62,9 @@ void App::maybe_finish_session() {
     // PREVIEW/IDLE (or no recorder): the session is settled — hand the captured
     // files back to the host and finish the scene. Done exactly once.
     results_sent_ = true;
-    jni::host_finish_with_results(state_->activity->vm, state_->activity->clazz,
-                                  jni::session_files());
+    JavaVM* vm  = host_->javaVm();
+    jobject act = static_cast<jobject>(host_->activityObject());
+    jni::host_finish_with_results(vm, act, jni::session_files());
 }
 
 App::~App() {
@@ -69,37 +73,22 @@ App::~App() {
     destroy_vulkan();
 }
 
-void App::run() {
-    while (true) {
-        int events;
-        android_poll_source* source;
+// ── Event loop ───────────────────────────────────────────────────────────────
 
-        // Block until a camera frame (or input/sensor/system event) wakes us.
-        // Camera frames call ALooper_wake() from update_camera_frame(); input and
-        // orientation sensor events arrive on their own fds. Using -1 (block
-        // forever) stops us from presenting duplicate frames on a timer, which was
-        // what made SurfaceFlinger hunt the LTPO refresh rate and stall
-        // vkWaitForFences ~90ms once per second.
-        // While finalizing there are no camera frames to wake us, but the UI must
-        // keep refreshing the "Processing…%" counter — poll on a short timeout so
-        // we redraw periodically. Otherwise block until the next frame/event (-1).
+void App::run() {
+    while (!host_->quitRequested()) {
         bool finalizing = recorder_ && recorder_->state() == rec::State::FINALIZING;
-        int ident;
-        // Idle: block until the next frame/event (-1). While finalizing, tick on a
-        // 100ms timeout to advance "Processing…%". While we still owe the surface a
-        // few post-resume UI repaints, spin (0) so we draw them promptly.
-        int timeout_ms = (ui_repaint_frames_ > 0) ? 0 : (finalizing ? 100 : -1);
-        while ((ident = ALooper_pollOnce(timeout_ms, nullptr, &events,
-                                reinterpret_cast<void**>(&source))) >= 0) {
-            if (source) source->process(state_, source);
-            if (ident == vce::platform::Orientation::LOOPER_ID) orientation_.handleEvents();
-            if (state_->destroyRequested) return;
-            timeout_ms = 0;  // drain any remaining events without blocking
-        }
+
+        // host_->pump() blocks if !haveWork, returns immediately otherwise.
+        // While finalizing we need periodic redraws for "Processing…%" — use a
+        // 100ms repeating timer so pump() wakes us even when there is no camera
+        // frame.
+        bool haveWork = ui_repaint_frames_ > 0 || finalizing;
+        host_->pump(haveWork);
 
         // Back pressed: drive the graceful exit (finalize if needed, then return
         // the captured files to the host and finish). While finalizing, the loop
-        // keeps ticking via the `finalizing` 100ms timeout and shows "Processing…%".
+        // keeps ticking via the finalizing timer and shows "Processing…%".
         maybe_finish_session();
 
         // Don't present while recording: the swapchain present periodically stalls
@@ -118,26 +107,140 @@ void App::run() {
     }
 }
 
+// ── AppView callbacks ────────────────────────────────────────────────────────
+
+void App::onHostResized() {
+    // Surface dimensions changed — recreate the swapchain (handled by
+    // onSurfaceRecreated which is fired by the host for actual surface changes).
+    // A resize that is NOT a new surface (Wayland configure) just needs a
+    // redraw.
+    if (renderer_) {
+        ui_repaint_frames_ = 1;
+    }
+}
+
+void App::shutdown() {
+    destroy_recorder();
+}
+
+void App::onSurfaceLost() {
+    destroy_vulkan();
+}
+
+bool App::onSurfaceRecreated() {
+    if (!renderer_) {
+        // Check permissions on first surface creation.
+        if (!permissions_granted_) {
+            permissions_granted_ = has_permissions(host_.get());
+        }
+        if (!permissions_granted_ && !permissions_requested_) {
+            request_permissions(host_.get());
+            permissions_requested_ = true;
+        }
+        init_vulkan();
+    }
+    return renderer_ != nullptr;
+}
+
+void App::onAppBackgrounded() {
+    resumed_ = false;
+    orientation_.disable();
+    host_->stopTimer(TIMER_FINALIZE);
+    if (recorder_ && recorder_->state() != rec::State::SAVING &&
+        recorder_->state() != rec::State::FINALIZING) {
+        stop_recording();
+    }
+}
+
+void App::onAppForegrounded() {
+    // App is in the foreground: (re)acquire the camera + orientation sensor.
+    resumed_ = true;
+    orientation_.enable();
+    // Re-check permissions in case the user just answered the dialog.
+    if (!permissions_granted_) {
+        permissions_granted_ = has_permissions(host_.get());
+    }
+    maybe_start_recording();
+    ui_repaint_frames_ = 4;
+}
+
+void App::onLButtonDown(int x, int y) {
+    if (!ui_ || !recorder_) return;
+    // Lock the UI while the previous clip is finalizing — no new recording
+    // and no mode switch until the file is written.
+    if (recorder_->state() == rec::State::FINALIZING) return;
+
+    ui::UI::Action act = ui_->on_touch(x, y);
+    if (act == ui::UI::Action::SHUTTER) {
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S");
+        std::string ts = ss.str();
+
+        const std::string& base = output_base();
+        if (base.empty()) {
+            LOGE("Failed to resolve output directory");
+            return;
+        }
+        if (ui_->is_video_mode()) {
+            if (recorder_->state() == rec::State::SAVING) {
+                recorder_->stop_saving();
+            } else {
+                std::string vdir = base + "/video";
+                archive::ensure_dir(vdir);
+                std::string out_path = vdir + "/VID_" + ts + ".mkv";
+                recorder_->start_saving(out_path);
+                jni::session_record_file(out_path);
+            }
+        } else {
+            std::string pdir = base + "/photo";
+            archive::ensure_dir(pdir);
+            std::string out_path = pdir + "/IMG_" + ts;
+            recorder_->take_photo(out_path);
+        }
+    } else if (act == ui::UI::Action::TOGGLE_MODE) {
+        if (recorder_ &&
+            recorder_->state() != rec::State::SAVING &&
+            recorder_->state() != rec::State::FINALIZING) {
+            recorder_->set_photo_mode(!ui_->is_video_mode());
+        }
+    } else if (act == ui::UI::Action::CYCLE_PHOTO_MODE) {
+        ui_photo_mode_ = (ui_photo_mode_ + 1) % 3;
+        recorder_->set_photo_output_mode(ui_photo_mode_);
+        ui_->set_photo_mode_index(ui_photo_mode_);
+    }
+}
+
+void App::onNavBack() {
+    exit_requested_ = true;
+}
+
+void App::onTimer(int timerId) {
+    if (timerId == TIMER_FINALIZE) {
+        // Finalizing timer: keep the UI updating "Processing…%". If finalize
+        // completes, stop the timer.
+        if (!recorder_ || recorder_->state() != rec::State::FINALIZING) {
+            host_->stopTimer(TIMER_FINALIZE);
+        }
+    }
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
+
 void App::init_vulkan() {
     // The Renderer owns the VkSurface/swapchain and is the ONLY thing tied to the
     // window surface. It may be created and destroyed many times during the app's
     // life (surface destroyed/recreated on rotate, lock/unlock, lifecycle churn).
     // The camera/recorder is deliberately NOT tied to this lifecycle.
-    surface_provider_ = new AndroidSurfaceProvider(state_->window);
-    asset_reader_     = new AndroidAssetReader(state_->activity->assetManager);
-    renderer_ = new Renderer(*surface_provider_, *asset_reader_);
+    renderer_ = new Renderer(host_->surfaceProvider(), host_->assetReader());
 
     // Load the overlay font once (used for the UI text). Not tied to the surface
     // lifecycle, so only load on the first init.
     if (!font_loaded_) {
-        AAssetManager* mgr = state_->activity->assetManager;
-        AAsset* a = AAssetManager_open(mgr, "fonts/font.otf", AASSET_MODE_BUFFER);
-        if (a) {
-            size_t sz = AAsset_getLength(a);
-            std::vector<uint8_t> buf(sz);
-            AAsset_read(a, buf.data(), sz);
-            AAsset_close(a);
-            font_loaded_ = overlay_font_.loadFromMemory(buf.data(), sz);
+        std::vector<uint8_t> fontData;
+        if (host_->dataReader().read("fonts/font.otf", fontData) && !fontData.empty()) {
+            font_loaded_ = overlay_font_.loadFromMemory(fontData.data(), fontData.size());
             LOGI("Overlay font load: %s", font_loaded_ ? "ok" : "FAILED");
         } else {
             LOGE("fonts/font.otf not found");
@@ -187,9 +290,11 @@ void App::maybe_start_recording() {
     }
 
     if (!recorder_) {
-        recorder_ = new rec::Recorder(state_->activity->assetManager,
-                                      state_->activity->vm,
-                                      state_->activity->clazz);
+        JavaVM* vm  = host_->javaVm();
+        jobject act = static_cast<jobject>(host_->activityObject());
+        // Recorder needs the raw AAssetManager for loading ML models from APK assets.
+        auto& assetReader = static_cast<AndroidAssetReader&>(host_->assetReader());
+        recorder_ = new rec::Recorder(assetReader.aassetManager(), vm, act);
     }
 
     recorder_->set_capture_orientation(orientation_.degrees());
@@ -226,8 +331,6 @@ void App::destroy_vulkan() {
     delete ui_;       ui_       = nullptr;
     delete canvas_;   canvas_   = nullptr;
     delete renderer_; renderer_ = nullptr;
-    delete surface_provider_; surface_provider_ = nullptr;
-    delete asset_reader_;     asset_reader_     = nullptr;
     LOGI("Renderer/UI destroyed (camera left running)");
 }
 
@@ -245,162 +348,4 @@ void App::draw_frame() {
     canvas_data_.clear();
     if (recorder_) ui_->update(*recorder_, orientation_.degrees());
     renderer_->draw(canvas_data_, 0);
-}
-
-int32_t App::handle_input(android_app* app, AInputEvent* event) {
-    auto* self = reinterpret_cast<App*>(app->userData);
-    int32_t type = AInputEvent_getType(event);
-
-    // Back: begin a graceful exit of the embedded scene. Consume it (return 1) so
-    // the system does not finish the activity immediately — that would drop the
-    // result; instead run() finalizes and returns the captured files first.
-    if (type == AINPUT_EVENT_TYPE_KEY) {
-        if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK &&
-            AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_UP) {
-            if (self) self->exit_requested_ = true;
-            return 1;
-        }
-        return 0;
-    }
-
-    if (type == AINPUT_EVENT_TYPE_MOTION) {
-        if (self->ui_ && self->recorder_) {
-            // Lock the UI while the previous clip is finalizing — no new recording
-            // and no mode switch until the file is written.
-            if (self->recorder_->state() == rec::State::FINALIZING) return 1;
-            int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
-            if (action == AMOTION_EVENT_ACTION_DOWN) {
-                float x = AMotionEvent_getX(event, 0);
-                float y = AMotionEvent_getY(event, 0);
-                ui::UI::Action act = self->ui_->on_touch(x, y);
-                // The RAW-pipeline A/B toggles (DN/DM/TD/CD) were removed from the
-                // UI once the best config was locked in as the default (HQ demosaic
-                // + chroma denoise on). The implementations live on in the pipeline
-                // (Recorder::set_denoise/set_demosaic_hq/set_temporal/set_chroma)
-                // for later refinement; they're just no longer driven from the UI.
-                if (act == ui::UI::Action::SHUTTER) {
-                    auto now = std::chrono::system_clock::now();
-                    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-                    std::stringstream ss;
-                    ss << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S");
-                    std::string ts = ss.str();
-
-                    const std::string& base = self->output_base();
-                    if (base.empty()) {
-                        LOGE("Failed to resolve output directory");
-                        return 1;
-                    }
-                    if (self->ui_->is_video_mode()) {
-                        if (self->recorder_->state() == rec::State::SAVING) {
-                            self->recorder_->stop_saving();
-                        } else {
-                            std::string vdir = base + "/video";
-                            archive::ensure_dir(vdir);
-                            std::string out_path = vdir + "/VID_" + ts + ".mkv";
-                            self->recorder_->start_saving(out_path);
-                            // Record the clip now; the exit flow waits out finalize
-                            // so the .mkv is complete before it is returned.
-                            jni::session_record_file(out_path);
-                        }
-                    } else {
-                        // Base without extension: Java appends "_<idx>.dng" (RAW
-                        // bracket) or ".png" (non-RAW); the merge/develop append
-                        // ".dng"/".hdr". Each exact path is recorded as written.
-                        std::string pdir = base + "/photo";
-                        archive::ensure_dir(pdir);
-                        std::string out_path = pdir + "/IMG_" + ts;
-                        self->recorder_->take_photo(out_path);
-                    }
-                } else if (act == ui::UI::Action::TOGGLE_MODE) {
-                    // ui_->on_touch already flipped the mode; reconfigure the camera
-                    // session to match (PHOTO → still stream, VIDEO → encoder). Never
-                    // mid-recording — the session must keep the encoder then.
-                    if (self->recorder_ &&
-                        self->recorder_->state() != rec::State::SAVING &&
-                        self->recorder_->state() != rec::State::FINALIZING) {
-                        self->recorder_->set_photo_mode(!self->ui_->is_video_mode());
-                    }
-                } else if (act == ui::UI::Action::CYCLE_PHOTO_MODE) {
-                    // Cycle the RAW photo output mode (0->1->2). The chip is only
-                    // shown in PHOTO mode when the host enabled it.
-                    self->ui_photo_mode_ = (self->ui_photo_mode_ + 1) % 3;
-                    self->recorder_->set_photo_output_mode(self->ui_photo_mode_);
-                    self->ui_->set_photo_mode_index(self->ui_photo_mode_);
-                }
-            }
-        }
-        return 1;
-    }
-    return 0;
-}
-
-void App::handle_cmd(android_app* app, int32_t cmd) {
-    auto* self = reinterpret_cast<App*>(app->userData);
-    switch (cmd) {
-        case APP_CMD_INIT_WINDOW:
-            if (!app->window) break;
-            // Hide the status bar.
-            vce::platform::enable_immersive(app, vce::platform::ImmersiveMode::kFullImmersive);
-            // Always bring up Vulkan/UI so something is on screen immediately.
-            self->permissions_granted_ = has_permissions(app);
-            if (!self->renderer_) {
-                self->init_vulkan();
-            } else {
-                self->maybe_start_recording();
-            }
-            // Ask for any missing permissions exactly once.
-            if (!self->permissions_granted_ && !self->permissions_requested_) {
-                request_permissions(app);
-                self->permissions_requested_ = true;
-            }
-            break;
-        case APP_CMD_GAINED_FOCUS:
-            self->focused_ = true;
-            // Re-apply status bar hide when focus returns.
-            vce::platform::enable_immersive(app, vce::platform::ImmersiveMode::kFullImmersive);
-            // The user may have just answered the permission dialog: re-check
-            // and start the recorder if it is now allowed.
-            if (!self->permissions_granted_) {
-                self->permissions_granted_ = has_permissions(app);
-            }
-            if (self->permissions_granted_ && !self->renderer_ && app->window) {
-                self->init_vulkan();
-            }
-            // Returning to the foreground: repaint the UI so the controls are
-            // visible/fresh (covers the case where the surface persisted and the
-            // swapchain wasn't recreated by init_vulkan).
-            self->ui_repaint_frames_ = 4;
-            self->maybe_start_recording();
-            break;
-        case APP_CMD_LOST_FOCUS:
-            self->focused_ = false;
-            break;
-        case APP_CMD_RESUME:
-            // App is in the foreground: (re)acquire the camera + orientation sensor.
-            self->resumed_ = true;
-            self->orientation_.enable();
-            self->maybe_start_recording();
-            break;
-        case APP_CMD_PAUSE:
-            // App is leaving the foreground. If we are recording a video, keep the
-            // camera running in the background. Otherwise, release it so Android
-            // doesn't force-revoke it and break our session.
-            self->resumed_ = false;
-            self->orientation_.disable();
-            if (self->recorder_ && self->recorder_->state() != rec::State::SAVING && 
-                self->recorder_->state() != rec::State::FINALIZING) {
-                self->stop_recording();
-            }
-            break;
-        case APP_CMD_TERM_WINDOW:
-            // Surface is gone: tear down ONLY the renderer. The camera keeps
-            // running and is re-attached when the surface (and renderer) return.
-            self->destroy_vulkan();
-            break;
-        case APP_CMD_DESTROY:
-            // Real app shutdown: now it is safe to stop the camera.
-            self->destroy_recorder();
-            break;
-        default: break;
-    }
 }

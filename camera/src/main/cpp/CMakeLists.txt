@@ -11,8 +11,9 @@ set(LIBS_DIR     ${ROOT_DIR}/libs)
 # First-party libraries (minervarr repos)
 set(FIRSTPARTY_DIR ${LIBS_DIR}/firstparty)
 set(CANVAS_DIR     ${FIRSTPARTY_DIR}/Vk_Canvas_Lb_LAW)
-set(AUDIO_DIR      ${FIRSTPARTY_DIR}/audio_engine/src/main/cpp)
-set(ARCHIVE_DIR    ${FIRSTPARTY_DIR}/archive_engine/src/main/cpp)
+set(AUDIO_DIR      ${FIRSTPARTY_DIR}/audio_engine)
+set(APP_SHELL_DIR  ${FIRSTPARTY_DIR}/app_shell)
+
 
 # Third-party libraries
 set(THIRDPARTY_DIR ${LIBS_DIR}/thirdparty)
@@ -21,6 +22,27 @@ set(NATIVE_GLUE  ${ANDROID_NDK}/sources/android/native_app_glue)
 
 # ── Vk_Canvas_Lb_LAW (canvas + font engine) ──────────────────────────────────
 add_subdirectory(${CANVAS_DIR}/core ${CMAKE_BINARY_DIR}/vk_canvas_core)
+
+# ── app_shell (platform abstraction) ──────────────────────────────────────────
+# app_shell's ui_metrics.hh requires a build-generated header that the
+# min_text_size tool produces from the app's fonts. The tool must RUN on the
+# build host, so it can't be used in a cross-compilation (Android) build.
+# Generate a fallback with a safe default for the camera's fonts.
+set(_gen_dir ${CMAKE_BINARY_DIR}/generated)
+set(_gen_header ${_gen_dir}/ui_min_text_size.gen.h)
+if(NOT EXISTS ${_gen_header})
+    file(MAKE_DIRECTORY ${_gen_dir})
+    file(WRITE ${_gen_header}
+        "// Auto-generated fallback for cross-compilation.\n"
+        "// Regenerate with the min_text_size tool for precise font-based values.\n"
+        "#pragma once\n"
+        "static constexpr float kMinReadableTextSizePx = 8.0f;\n")
+endif()
+
+set(APP_SHELL_APP_NAME "CameraRecorder" CACHE STRING "" FORCE)
+set(APP_SHELL_NATIVE_APP_GLUE_DIR ${NATIVE_GLUE} CACHE PATH "" FORCE)
+set(VK_CANVAS_DIR ${CANVAS_DIR} CACHE PATH "" FORCE)
+add_subdirectory(${APP_SHELL_DIR} ${CMAKE_BINARY_DIR}/app_shell)
 
 # --- KissFFT ---
 add_library(kiss_fft STATIC
@@ -48,7 +70,7 @@ set_target_properties(onnxruntime PROPERTIES IMPORTED_LOCATION
 target_include_directories(onnxruntime INTERFACE ${ONNXRUNTIME_DIR}/include)
 
 # ── libusb (from audio_engine submodule) ──────────────────────────────────────
-set(LIBUSB_DIR ${AUDIO_DIR}/libusb)
+set(LIBUSB_DIR ${AUDIO_DIR}/third_party/libusb)
 add_library(usb1 STATIC
     ${LIBUSB_DIR}/libusb/core.c
     ${LIBUSB_DIR}/libusb/descriptor.c
@@ -62,8 +84,11 @@ add_library(usb1 STATIC
     ${LIBUSB_DIR}/libusb/os/threads_posix.c
 )
 target_include_directories(usb1 PRIVATE
-    ${AUDIO_DIR}
+    ${AUDIO_DIR}/backends/usb
+    ${AUDIO_DIR}/core/include
     ${LIBUSB_DIR}/android
+    ${AUDIO_DIR}/third_party
+    ${LIBUSB_DIR}
     ${LIBUSB_DIR}/libusb
     ${LIBUSB_DIR}/libusb/os
 )
@@ -98,6 +123,13 @@ add_subdirectory(${THIRDPARTY_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
 # ── Shader compilation (slangc from Vulkan SDK) ───────────────────────────────
 # Reusable Slang→SPIR-V helper provided by the canvas library. Override the
 # compiler path with -DVCE_SLANGC=/path/to/slangc if the Vulkan SDK is elsewhere.
+# On Linux, if VULKAN_SDK is not set, search common locations for slangc.
+if(NOT DEFINED VCE_SLANGC AND NOT DEFINED ENV{VULKAN_SDK} AND NOT WIN32)
+    find_program(_slangc NAMES slangc PATHS /opt/shader-slang/bin /usr/local/bin /usr/bin)
+    if(_slangc)
+        set(VCE_SLANGC "${_slangc}" CACHE FILEPATH "Path to slangc")
+    endif()
+endif()
 include(${CANVAS_DIR}/cmake/VceShaders.cmake)
 
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../assets/shaders)
@@ -159,9 +191,9 @@ add_library(camera_recorder SHARED
     ui/ui.cc
 
     # audio_engine native sources (JNI wrappers excluded — we call C++ API directly)
-    ${AUDIO_DIR}/usb_audio.cpp
+    ${AUDIO_DIR}/backends/usb/usb_audio.cpp
 
-    # archive_engine native sources
+    # archive path helper (local file, no submodule dependency)
     archive.cc
 
     # NDK native app glue
@@ -176,10 +208,13 @@ target_include_directories(camera_recorder PRIVATE
     ${CANVAS_DIR}/core
     ${CANVAS_DIR}/platform/android
     ${CANVAS_DIR}/first_party/vulkan_font_engine/core
-    ${AUDIO_DIR}
+    ${APP_SHELL_DIR}
+    ${APP_SHELL_DIR}/os
+    ${AUDIO_DIR}/backends/usb
+    ${AUDIO_DIR}/core/include
+    ${AUDIO_DIR}/third_party
+    ${LIBUSB_DIR}
     ${LIBUSB_DIR}/libusb
-    ${ARCHIVE_DIR}/archive/include
-    ${ARCHIVE_DIR}/util/include
     ${NATIVE_GLUE}
     ${THIRDPARTY_DIR}/libebml
     ${THIRDPARTY_DIR}/libmatroska
@@ -192,6 +227,9 @@ target_compile_options(camera_recorder PRIVATE -O2)
 target_link_libraries(camera_recorder
     # Canvas + Font engine (vk_canvas_core links vk_font_core which links freetype + msdfgen)
     vk_canvas_core
+    # Platform abstraction (app_shell Android host)
+    app_shell
+    app_shell_android
     # AI Noise Reduction
     ncnn
     # Audio and DSP

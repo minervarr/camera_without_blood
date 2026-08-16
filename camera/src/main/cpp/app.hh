@@ -1,6 +1,8 @@
 #pragma once
 
-#include <android_native_app_glue.h>
+#include "app_view.hh"
+#include "host.hh"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,20 +12,31 @@
 
 class Renderer;
 class Canvas;
-class AndroidSurfaceProvider;
-class AndroidAssetReader;
 
 namespace ui  { class UI; }
 namespace rec { class Recorder; }
 
-class App {
+class App : public AppView {
 public:
-    explicit App(android_app* state);
+    explicit App(std::unique_ptr<Host> host);
     ~App();
 
     void run();
 
+    // ── AppView callbacks ──────────────────────────────────────────────────
+    void onHostResized() override;
+    void shutdown() override;
+    void onSurfaceLost() override;
+    bool onSurfaceRecreated() override;
+    void onAppBackgrounded() override;
+    void onAppForegrounded() override;
+    void onLButtonDown(int x, int y) override;
+    void onNavBack() override;
+    void onTimer(int timerId) override;
+
 private:
+    enum Timer { TIMER_FINALIZE = 1 };
+
     void init_vulkan();
     void destroy_vulkan();           // tears down renderer/canvas/ui ONLY (surface-tied)
     void destroy_recorder();         // stops + frees the recorder (app shutdown only)
@@ -33,14 +46,9 @@ private:
     void maybe_finish_session();     // back pressed: finalize, then return files + finish
     const std::string& output_base();// dir for captures (host's, else Documents)
 
-    static void handle_cmd(android_app* app, int32_t cmd);
-    static int32_t handle_input(android_app* app, AInputEvent* event);
-
-    android_app* state_;
+    std::unique_ptr<Host> host_;
 
     Renderer*      renderer_  = nullptr;
-    AndroidSurfaceProvider* surface_provider_ = nullptr;
-    AndroidAssetReader*     asset_reader_    = nullptr;
     Font           overlay_font_;
     bool           font_loaded_ = false;
     std::vector<float> canvas_data_;
