@@ -1,0 +1,18 @@
+{
+  "name": "camera_without_blood",
+  "description": "Pro Android camera recorder that bypasses high-level frameworks to capture the highest-quality video/audio the hardware allows.",
+  "version": "0.1.0",
+  "platforms": ["android"],
+  "language": "C++17",
+  "ui_framework": "vk_canvas",
+  "capture": {
+    "api": "Camera2 NDK (Android)",
+    "features": ["10-bit HDR RAW PQ", "HEVC Main10", "FLAC audio", "DNG stills", "DeepFilterNet denoise"]
+  },
+  "audio_engine": {
+    "path": "libs/firstparty/audio_engine",
+    "backends": ["usb (DAC direct)", "aaudio (built-in mic)"]
+  },
+  "muxer": "libmatroska/libebml (MKV)",
+  "isp": "Vulkan compute (demosaic, white balance, CCM, PQ ST 2084, chroma denoise)"
+}
