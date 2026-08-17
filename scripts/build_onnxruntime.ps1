@@ -27,7 +27,7 @@ param(
   [string]$Sdk         = $env:ANDROID_HOME,
   [string]$Ndk         = "",
   [string]$Python      = "python",
-  [string]$SrcDir      = (Join-Path $PSScriptRoot ".ort_src"),
+  [string]$SrcDir      = (Join-Path (Split-Path $PSScriptRoot -Parent) ".ort_src"),
   [switch]$SkipClone,
   [switch]$ForceClone
 )
@@ -94,7 +94,7 @@ if (-not (Test-Path $Ndk)) { throw "Android NDK not found: $Ndk (set -Ndk)" }
 
 $buildPy = Join-Path $SrcDir "tools/ci_build/build.py"
 $buildDir = Join-Path $SrcDir "build/Android"
-$dest = Join-Path $PSScriptRoot "libs/thirdparty/onnxruntime/lib/$AndroidAbi"
+$dest = Join-Path (Split-Path $PSScriptRoot -Parent) "libs/thirdparty/onnxruntime/lib/$AndroidAbi"
 
 Write-Host "ORT version : $OrtVersion"
 Write-Host "ABI / API   : $AndroidAbi / $AndroidApi"

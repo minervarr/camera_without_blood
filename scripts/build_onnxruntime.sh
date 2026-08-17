@@ -29,7 +29,8 @@ FORCE_CLONE=false
 PYTHON=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC_DIR="${SCRIPT_DIR}/.ort_src"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SRC_DIR="${REPO_ROOT}/.ort_src"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -81,7 +82,7 @@ fi
 
 BUILD_PY="${SRC_DIR}/tools/ci_build/build.py"
 BUILD_DIR="${SRC_DIR}/build/Android"
-DEST="${SCRIPT_DIR}/libs/thirdparty/onnxruntime/lib/${ANDROID_ABI}"
+DEST="${REPO_ROOT}/libs/thirdparty/onnxruntime/lib/${ANDROID_ABI}"
 
 echo "ORT version : ${ORT_VERSION}"
 echo "ABI / API   : ${ANDROID_ABI} / ${ANDROID_API}"

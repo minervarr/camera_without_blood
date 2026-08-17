@@ -18,7 +18,7 @@
 #
 
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 RELEASE=false
@@ -61,7 +61,7 @@ else
     if [[ -n "$PYTHON" ]]; then
         ONNX_ARGS+=(--python "$PYTHON")
     fi
-    bash "$ROOT/build_onnxruntime.sh" "${ONNX_ARGS[@]}"
+    bash "$ROOT/scripts/build_onnxruntime.sh" "${ONNX_ARGS[@]}"
 fi
 
 # ── 2. Gradle ───────────────────────────────────────────────────────────────

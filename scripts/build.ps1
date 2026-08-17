@@ -20,7 +20,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+$root = Split-Path $PSScriptRoot -Parent
 
 # ONNX Runtime's build scripts are happiest on CPython 3.10-3.12; this host's
 # default may be newer (e.g. 3.14). Prefer a known-good interpreter via the
