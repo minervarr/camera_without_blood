@@ -2,6 +2,7 @@
 
 #include "app_view.hh"
 #include "host.hh"
+#include "android_platform.hh"
 
 #include <memory>
 #include <string>
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<Host> host_;
 
     Renderer*      renderer_  = nullptr;
+    AndroidFrameWaker frame_waker_{ALooper_forThread()};
     Font           overlay_font_;
     bool           font_loaded_ = false;
     std::vector<float> canvas_data_;

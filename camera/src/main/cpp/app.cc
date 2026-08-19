@@ -22,6 +22,11 @@
 static constexpr int kOrientationLooperId = 5;
 
 App::App(std::unique_ptr<Host> host) : host_(std::move(host)) {
+    // Register as the Host's AppView so onSurfaceRecreated() fires when the
+    // window arrives. This also sets up eventFd/timerFd and blocks until the
+    // native window is available.
+    host_->init(this);
+
     // Embedded-scene launch options from the host CameraActivity (safe no-ops
     // under a plain NativeActivity). Start each scene with a clean capture list.
     JavaVM* vm   = host_->javaVm();
@@ -31,6 +36,18 @@ App::App(std::unique_ptr<Host> host) : host_(std::move(host)) {
     ui_photo_mode_         = jni::host_photo_mode(vm, act);
     ui_photo_mode_ui_enabled_ = jni::host_photo_mode_ui(vm, act);
     orientation_.start(kOrientationLooperId);
+
+    // host_->init() blocks waiting for the window. During that wait it processes
+    // APP_CMD_RESUME, but appReady_ is still false so onAppForegrounded() is
+    // never called. When pump() later sets appReady_ = true the RESUME event is
+    // already consumed. Mark as resumed explicitly — init() only returns when the
+    // activity is in the foreground (window exists), so this is always correct.
+    resumed_ = true;
+
+    // On first launch, onWindowInit() fires during host_->init() before pump()
+    // sets appReady_, so onSurfaceRecreated() is never triggered by the host.
+    // Kick it manually — onSurfaceRecreated() is a no-op if the renderer exists.
+    onSurfaceRecreated();
 }
 
 const std::string& App::output_base() {
@@ -100,7 +117,8 @@ void App::run() {
         // (returning from background mid-recording would otherwise show black).
         bool ready  = renderer_ && renderer_->consume_frame_ready();
         bool saving = recorder_ && recorder_->state() == rec::State::SAVING;
-        if (renderer_ && (ui_repaint_frames_ > 0 || (!saving && (ready || finalizing)))) {
+        bool raw_saving = saving && recorder_->video_mode() == rec::VideoMode::RAW_PQ;
+        if (renderer_ && (ui_repaint_frames_ > 0 || (!raw_saving && (ready || finalizing)))) {
             draw_frame();
             if (ui_repaint_frames_ > 0) --ui_repaint_frames_;
         }
@@ -234,6 +252,7 @@ void App::init_vulkan() {
     // life (surface destroyed/recreated on rotate, lock/unlock, lifecycle churn).
     // The camera/recorder is deliberately NOT tied to this lifecycle.
     renderer_ = new Renderer(host_->surfaceProvider(), host_->assetReader());
+    renderer_->set_frame_waker(&frame_waker_);
 
     // Load the overlay font once (used for the UI text). Not tied to the surface
     // lifecycle, so only load on the first init.

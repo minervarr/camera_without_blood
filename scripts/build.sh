@@ -75,7 +75,11 @@ if $BUILD_DEMO; then
 fi
 
 if $BUILD_DEMO; then
-    TASK=":demo:assembleDebug"
+    if $RELEASE; then
+        TASK=":demo:assembleRelease"
+    else
+        TASK=":demo:assembleDebug"
+    fi
 elif $RELEASE; then
     TASK=":camera:assembleRelease"
 else

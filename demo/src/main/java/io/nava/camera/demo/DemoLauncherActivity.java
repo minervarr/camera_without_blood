@@ -5,9 +5,6 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Environment;
 import android.util.Log;
-import android.view.Gravity;
-import android.widget.Button;
-import android.widget.LinearLayout;
 import android.widget.Toast;
 
 import java.io.File;
@@ -29,17 +26,13 @@ public class DemoLauncherActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
-
-        // One button per photo output mode (the in-scene chip stays enabled so the
-        // mode can also be changed inside the camera).
-        addModeButton(root, "Camera — FAST HDR (1 DNG, default)", CameraLauncher.PHOTO_MODE_FAST_HDR);
-        addModeButton(root, "Camera — STATIC HDR (merged DNG)",   CameraLauncher.PHOTO_MODE_STATIC_HDR);
-        addModeButton(root, "Camera — STATIC HDR + RAW set",      CameraLauncher.PHOTO_MODE_STATIC_HDR_RAW);
-
-        setContentView(root);
+        // Skip the launcher UI entirely — go straight to the camera with
+        // default options (PHOTO mode, FAST HDR, photo-mode chip enabled).
+        startActivityForResult(
+                CameraLauncher.createIntent(this, outputDir(), /*startVideo=*/false,
+                                            CameraLauncher.PHOTO_MODE_FAST_HDR,
+                                            /*photoModeUi=*/true),
+                REQ_CAMERA);
     }
 
     // Save into the public Documents/camera_without_blood folder, matching the old
@@ -48,16 +41,6 @@ public class DemoLauncherActivity extends Activity {
     private String outputDir() {
         return new File(Environment.getExternalStoragePublicDirectory(
                 Environment.DIRECTORY_DOCUMENTS), "camera_without_blood").getAbsolutePath();
-    }
-
-    private void addModeButton(LinearLayout root, String label, int photoMode) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setOnClickListener(v -> startActivityForResult(
-                CameraLauncher.createIntent(this, outputDir(), /*startVideo=*/false,
-                                            photoMode, /*photoModeUi=*/true),
-                REQ_CAMERA));
-        root.addView(b);
     }
 
     @Override

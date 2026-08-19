@@ -157,6 +157,12 @@ public class HdrCameraSession {
     // toggling recreates the session. Ignored while rawVideoMode owns the session.
     private volatile boolean photoMode = true;
 
+    // When the device supports a 3-stream session (preview + still + encoder),
+    // mode toggle skips recreateSession() and just switches capture targets —
+    // no black screen gap.
+    private boolean threeStreamCapable = false;
+    private boolean pendingThreeStream = false;
+
     public HdrCameraSession(Context ctx, long nativeCtx) {
         this.nativeCtx = nativeCtx;
         this.appCtx = ctx;
@@ -251,9 +257,10 @@ public class HdrCameraSession {
         Log.i(TAG, "raw video mode: " + enabled);
     }
 
-    /** PHOTO vs VIDEO session selection for the legacy (non-rawVideo) path. PHOTO
-     *  brings up preview + the still stream, VIDEO brings up preview + the encoder;
-     *  switching recreates the session. No-op for RAW-video devices and while
+    /** PHOTO vs VIDEO session selection for the legacy (non-rawVideo) path. On
+     *  devices that support a 3-stream session (preview + still + encoder), the
+     *  switch is instant — just changes capture targets. Otherwise the session is
+     *  recreated (brief black screen). No-op for RAW-video devices and while
      *  recording (the session must keep the encoder then). */
     public synchronized void setPhotoMode(boolean photo) {
         if (rawVideoMode || photoMode == photo) return;
@@ -261,7 +268,12 @@ public class HdrCameraSession {
         Log.i(TAG, "photo mode: " + photo);
         if (recording) return;
         if (device != null && session != null) {
-            try { recreateSession(); } catch (Exception e) { Log.e(TAG, "setPhotoMode", e); }
+            if (threeStreamCapable) {
+                // 3-stream session has all surfaces; just switch capture targets.
+                startRepeating(false);
+            } else {
+                try { recreateSession(); } catch (Exception e) { Log.e(TAG, "setPhotoMode", e); }
+            }
         }
     }
 
@@ -329,7 +341,7 @@ public class HdrCameraSession {
             Size vd = pickLargestEncodable(sizes, aspect, MAX_VIDEO_WIDTH);
             recordWidth = vd.getWidth();
             recordHeight = vd.getHeight();
-            Size pv = pickAspectNearWidth(sizes, aspect, 720);
+            Size pv = pickAspectNearWidth(sizes, aspect, 480);
             previewWidth = pv.getWidth();
             previewHeight = pv.getHeight();
             Log.i(TAG, String.format("aspect %.3f  preview %dx%d  video %dx%d",
@@ -414,6 +426,8 @@ public class HdrCameraSession {
 
     public synchronized void stopPreview() {
         sessionGen++;   // invalidate any in-flight session-configured callbacks
+        threeStreamCapable = false;
+        pendingThreeStream = false;
         try {
             stopRecording();
             if (session != null) { session.close(); session = null; }
@@ -944,10 +958,10 @@ public class HdrCameraSession {
     };
 
     /**
-     * Builds the capture session once (called only from onOpened).
-     * Always registers: preview + persistentInputSurface (HLG10) + RAW (if available).
-     * Recording start/stop is handled by setRepeatingRequest() alone — no session rebuild,
-     * no ISP pipeline stall.
+     * Builds the capture session. For non-RAW legacy devices, tries a 3-stream
+     * session (preview + still + encoder) so mode toggle doesn't need session
+     * recreation (avoids black screen). Falls back to 2-stream if the device
+     * doesn't support the combo.
      */
     private void recreateSession() throws CameraAccessException {
         if (device == null) return;
@@ -957,13 +971,76 @@ public class HdrCameraSession {
         final CameraDevice dev = device;
 
         List<OutputConfiguration> outputs = new ArrayList<>();
-        // Preview stays SDR (displayed on an sRGB swapchain → correct colors).
         outputs.add(new OutputConfiguration(previewReader.getSurface()));
-        // The second stream depends on mode/capabilities (each is a guaranteed
-        // 2-stream combo — never preview + encoder + still together):
-        //   · RAW video → preview + RAW16 (native ISP; also serves stills)
-        //   · PHOTO     → preview + still (RAW16/DNG if present, else YUV/PNG)
-        //   · VIDEO     → preview + HLG10 encoder surface
+
+        pendingThreeStream = false;
+        if (rawVideoMode && rawReader != null) {
+            outputs.add(new OutputConfiguration(rawReader.getSurface()));
+            activeStill = STILL_RAW;
+        } else if (!rawVideoMode) {
+            // Non-RAW legacy path: try 3-stream (preview + still + encoder) so
+            // mode toggle doesn't need session recreation (avoids black screen).
+            boolean addedStill = false;
+            if (rawReader != null) {
+                outputs.add(new OutputConfiguration(rawReader.getSurface()));
+                activeStill = STILL_RAW;
+                addedStill = true;
+            } else if (stillReader != null) {
+                outputs.add(new OutputConfiguration(stillReader.getSurface()));
+                activeStill = STILL_YUV;
+                addedStill = true;
+            } else {
+                activeStill = STILL_NONE;
+            }
+            if (inputSurfaceSized && persistentInputSurface != null) {
+                outputs.add(makeOutput(persistentInputSurface));
+                if (addedStill) pendingThreeStream = true;
+            }
+        } else {
+            activeStill = STILL_NONE;
+        }
+
+        Executor exec = cmd -> { if (bgHandler != null) bgHandler.post(cmd); };
+        SessionConfiguration cfg = new SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR, outputs, exec,
+                new CameraCaptureSession.StateCallback() {
+                    @Override public void onConfigured(CameraCaptureSession s) {
+                        if (gen != sessionGen || device != dev) {
+                            try { s.close(); } catch (Exception ignored) {}
+                            return;
+                        }
+                        session = s;
+                        if (pendingThreeStream) {
+                            threeStreamCapable = true;
+                            pendingThreeStream = false;
+                            Log.i(TAG, "3-stream session OK (no recreate on toggle)");
+                        }
+                        startRepeating(recording);
+                    }
+                    @Override public void onConfigureFailed(CameraCaptureSession s) {
+                        Log.e(TAG, "session configure failed (3-stream=" + pendingThreeStream + ")");
+                        if (pendingThreeStream) {
+                            // 3-stream not supported; retry with 2-stream (legacy).
+                            pendingThreeStream = false;
+                            try { recreateSessionLegacy(); } catch (Exception e) {
+                                Log.e(TAG, "legacy fallback", e);
+                            }
+                        }
+                    }
+                });
+        device.createCaptureSession(cfg);
+    }
+
+    /** 2-stream fallback for devices that don't support preview+still+encoder. */
+    private void recreateSessionLegacy() throws CameraAccessException {
+        if (device == null) return;
+        if (session != null) { session.close(); session = null; }
+
+        final int gen = ++sessionGen;
+        final CameraDevice dev = device;
+
+        List<OutputConfiguration> outputs = new ArrayList<>();
+        outputs.add(new OutputConfiguration(previewReader.getSurface()));
         if (rawVideoMode && rawReader != null) {
             outputs.add(new OutputConfiguration(rawReader.getSurface()));
             activeStill = STILL_RAW;
@@ -974,12 +1051,9 @@ public class HdrCameraSession {
             outputs.add(new OutputConfiguration(stillReader.getSurface()));
             activeStill = STILL_YUV;
         } else if (inputSurfaceSized && persistentInputSurface != null) {
-            // Encoder surface registered so recording starts with just a
-            // setRepeatingRequest() — no session close/reopen, no stall.
             outputs.add(makeOutput(persistentInputSurface));
             activeStill = STILL_NONE;
         } else if (rawReader != null) {
-            // Fallback (encoder couldn't be configured): preview + RAW for stills.
             outputs.add(new OutputConfiguration(rawReader.getSurface()));
             activeStill = STILL_RAW;
         } else {
@@ -999,7 +1073,7 @@ public class HdrCameraSession {
                         startRepeating(recording);
                     }
                     @Override public void onConfigureFailed(CameraCaptureSession s) {
-                        Log.e(TAG, "session configure failed");
+                        Log.e(TAG, "legacy session configure failed");
                     }
                 });
         device.createCaptureSession(cfg);

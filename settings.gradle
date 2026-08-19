@@ -17,4 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "camera_without_blood"
 include ':camera'        // the embeddable camera library (produces the .aar)
 include ':engine-audio'  // audio_engine Java, as a standalone coordinate (dedup)
-// DEMO placeholder — build.sh swaps this for "include ':demo'" then reverts
+include ':demo'          // the installable demo build for on-device verification
