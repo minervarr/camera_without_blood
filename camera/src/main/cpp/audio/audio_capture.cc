@@ -41,35 +41,16 @@ static int64_t monotonic_ns() {
 
 AudioCapture::~AudioCapture() { close(); stop_ai_recording(); }
 
-bool AudioCapture::open(const AudioConfig& cfg) {
-    cfg_ = cfg;
-
-    auto devices = UsbAudioDriver::enumerateUsbAudioDevices();
-    for (auto& info : devices) {
-        auto* drv = new UsbAudioDriver();
-        if (drv->open(info.vid, info.pid)) {
-            drv->parseDescriptors();
-            if (drv->hasCaptureFormats()) {
-                drv->configureCapture(cfg_.sample_rate, cfg_.channels, cfg_.bit_depth);
-                driver_ = drv;
-                LOGI("USB audio opened: %s %dHz %dch %dbit",
-                     info.name.c_str(), cfg_.sample_rate, cfg_.channels, cfg_.bit_depth);
-                return true;
-            }
-        }
-        delete drv;
-    }
-
-    LOGE("No USB audio capture device found");
-    return false;
-}
-
 bool AudioCapture::open_fd(int fd, const AudioConfig& cfg) {
     cfg_ = cfg;
     if (fd <= 0) { LOGE("open_fd: invalid fd %d", fd); return false; }
 
     auto* drv = new UsbAudioDriver();
     if (!drv->open(fd) || (drv->parseDescriptors(), !drv->hasCaptureFormats())) {
+        // close() before delete: a successful open(fd) has adopted the fd and a
+        // libusb event-thread reference, and ~UsbAudioDriver does not release
+        // them — dropping straight to delete leaked both.
+        drv->close();
         delete drv;
         LOGE("open_fd: no USB capture formats (fd=%d)", fd);
         return false;
@@ -152,9 +133,15 @@ bool AudioCapture::start(FlacFrameCallback cb) {
     // Guard a degenerate negotiated format (e.g. a USB capture alt configureCapture
     // couldn't actually set, leaving rate/bits at 0). A 0 rate would also
     // divide-by-zero in capture_loop's timestamp, and 0 bits fails init outright.
+    //
+    // The depth is restricted to the widths capture_loop actually decodes (16/24/
+    // 32-bit little-endian PCM). The old "4..32" range let two broken formats
+    // through: below 8 bits, bytes_per_sample floored to 0 and capture_loop
+    // divided by zero on frame_stride; at 8 bits, no conversion branch matched
+    // and every sample stayed 0 — a silently silent recording.
     if (cfg_.sample_rate <= 0 || cfg_.channels < 1 || cfg_.channels > 8 ||
-        cfg_.bit_depth < 4 || cfg_.bit_depth > 32) {
-        LOGE("Refusing audio: bad format rate=%d ch=%d bits=%d",
+        (cfg_.bit_depth != 16 && cfg_.bit_depth != 24 && cfg_.bit_depth != 32)) {
+        LOGE("Refusing audio: bad format rate=%d ch=%d bits=%d (need 16/24/32-bit)",
              cfg_.sample_rate, cfg_.channels, cfg_.bit_depth);
         return false;
     }
@@ -404,6 +391,8 @@ void AudioCapture::capture_loop() {
 
     std::vector<uint8_t>       raw(frame_bytes);
     int                        raw_filled = 0;
+    int                        read_errors = 0;
+    constexpr int              kMaxReadErrors = 200;   // ~1 s of failed reads
 
     // De-interleave scratch buffers, allocated ONCE and reused every block.
     // (Per-block allocation here caused recurring ~85ms latency spikes that could
@@ -429,9 +418,18 @@ void AudioCapture::capture_loop() {
         }
 
         if (got <= 0) {
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            // A hard read error repeats forever (AAudio returns <0 for good once
+            // the stream is disconnected), so a flat 200us retry span the CPU at
+            // ~5 kHz for the rest of the recording. Back off, and give up rather
+            // than spin if the source never recovers.
+            if (got < 0 && ++read_errors > kMaxReadErrors) {
+                LOGE("audio source failed %d consecutive reads — stopping capture", read_errors);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(200 * (got < 0 ? 25 : 1)));
             continue;
         }
+        read_errors = 0;
 
         // Anchor the audio timeline to the first sample's capture instant, in the
         // same clock domain as the video encoder PTS (MONOTONIC), so A/V align.

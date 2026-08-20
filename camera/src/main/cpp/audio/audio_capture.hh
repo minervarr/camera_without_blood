@@ -33,10 +33,6 @@ public:
     AudioCapture() = default;
     ~AudioCapture();
 
-    // Opens first USB audio device with capture support (libusb device
-    // discovery — only works with root; kept as a fallback).
-    bool open(const AudioConfig& cfg = {});
-
     // Opens a USB device from a file descriptor obtained via Android's
     // UsbManager (after a runtime USB permission grant). This is the path that
     // works on a normal, non-rooted device.

@@ -5,6 +5,7 @@
 #define TINY_DNG_WRITER_IMPLEMENTATION
 #include "tiny_dng_writer.h"
 
+#include <cstring>   // std::memcpy (was only reaching it transitively)
 #include <vector>
 
 #undef LOG_TAG
@@ -110,6 +111,11 @@ bool write_dng(const std::string& path, const uint16_t* data, const DngMeta& m) 
     const size_t tight_stride = static_cast<size_t>(m.width) * 2;
     const size_t src_stride =
         m.stride_bytes > 0 ? static_cast<size_t>(m.stride_bytes) : tight_stride;
+    if (m.width <= 0 || m.height <= 0 || src_stride < tight_stride) {
+        LOGE("bad RAW geometry %dx%d stride=%d — refusing to write %s",
+             m.width, m.height, m.stride_bytes, path.c_str());
+        return false;
+    }
     std::vector<unsigned char> buf(tight_stride * m.height);
     const unsigned char* src = reinterpret_cast<const unsigned char*>(data);
     for (int y = 0; y < m.height; ++y) {

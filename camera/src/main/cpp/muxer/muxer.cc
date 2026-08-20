@@ -186,6 +186,10 @@ bool Muxer::open(const std::string& path,
 
 void Muxer::close() {
     if (!open_) return;
+    // impl_ (and impl_->mtx with it) deliberately outlives close(): write_video/
+    // write_audio test open_ and then lock impl_->mtx, so freeing the Impl here
+    // would hand a concurrent writer a destroyed mutex. Ownership stays with the
+    // Muxer — the destructor and a subsequent open() release it.
     std::lock_guard<std::mutex> lock(impl_->mtx);
     try {
         impl_->flush_cluster();
@@ -194,7 +198,10 @@ void Muxer::close() {
         // Patch the real duration over the placeholder written at open().
         // KaxDuration is a fixed 8-byte float, so the re-rendered Info element
         // is byte-identical in size.
-        if (impl_->last_rel_ns > 0) {
+        // start_ns >= 0 means at least one block was written, so the placeholder
+        // must be replaced even for a clip whose blocks all land at rel == 0
+        // (a single-frame capture) — otherwise the bogus 1.0 s placeholder ships.
+        if (impl_->start_ns >= 0) {
             KaxInfo& info = GetChild<KaxInfo>(impl_->segment);
             GetChild<KaxDuration>(info).SetValue(
                 static_cast<double>(impl_->last_rel_ns) / TS_SCALE);
@@ -210,7 +217,6 @@ void Muxer::close() {
     }
     if (impl_->file) { impl_->file->close(); delete impl_->file; impl_->file = nullptr; }
     open_ = false;
-    delete impl_; impl_ = nullptr;
     LOGI("Muxer closed");
 }
 

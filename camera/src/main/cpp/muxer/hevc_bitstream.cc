@@ -88,11 +88,35 @@ bool build_hvcc(const uint8_t* csd_annexb, int len, std::vector<uint8_t>& out) {
     return true;
 }
 
+// Runs once per encoded frame, so it walks the Annex B buffer in place instead
+// of materializing a std::vector<Nal> first (that was a heap allocation per
+// frame at 30 fps). `out` keeps its capacity across calls — hand in the same
+// scratch vector every frame.
 void annexb_to_length_prefixed(const uint8_t* in, int len, std::vector<uint8_t>& out) {
     out.clear();
-    for (auto& n : split_nals(in, len)) {
-        put_u32(out, uint32_t(n.size));
-        out.insert(out.end(), n.data, n.data + n.size);
+    if (!in || len <= 0) return;
+    out.reserve(static_cast<size_t>(len) + 16);
+
+    auto is_start = [&](int j, int& sc) -> bool {
+        if (j + 3 < len && in[j] == 0 && in[j+1] == 0 && in[j+2] == 0 && in[j+3] == 1) { sc = 4; return true; }
+        if (j + 2 < len && in[j] == 0 && in[j+1] == 0 && in[j+2] == 1) { sc = 3; return true; }
+        return false;
+    };
+
+    int sc = 0;
+    int i  = 0;
+    while (i < len && !is_start(i, sc)) ++i;
+    while (i < len) {
+        i += sc;                      // skip this NAL's start code
+        const int start = i;
+        int next = i, nsc = 0;
+        while (next < len && !is_start(next, nsc)) ++next;
+        if (next > start) {
+            put_u32(out, uint32_t(next - start));
+            out.insert(out.end(), in + start, in + next);
+        }
+        i  = next;
+        sc = nsc;
     }
 }
 

@@ -11,10 +11,7 @@ public:
     ~UI() = default;
 
     // Called once per frame. Draws the interface and handles recording state.
-    // device_orientation is the physical orientation in degrees (0/90/180/270);
-    // the whole overlay is rotated by it so labels/icons stay upright to the user
-    // while the camera preview underneath stays fixed.
-    void update(rec::Recorder& recorder, int device_orientation);
+    void update(rec::Recorder& recorder);
     enum class Action { NONE, TOGGLE_MODE, SHUTTER, CYCLE_PHOTO_MODE };
     Action on_touch(float x, float y);
     bool is_video_mode() const { return mode_ == Mode::VIDEO; }
@@ -28,8 +25,20 @@ public:
     void set_photo_mode_ui_enabled(bool e) { photo_mode_ui_enabled_ = e; }
 
 private:
-    void draw_photo_mode(int device_orientation);
-    void draw_video_mode(int device_orientation, bool is_recording, int64_t duration_ms,
+    // Shared control-bar geometry: both modes place the shutter and the
+    // mode toggle identically, so the placement lives in one place.
+    struct Layout {
+        float w, h;          // canvas size
+        float y_offset;      // letterbox band above the 1080x1920 design frame
+        float top_y;         // baseline for the top status line
+        float btn_size;      // shutter diameter
+        float bottom_y;      // control-bar centre line
+        float toggle_w, toggle_h;
+    };
+    Layout compute_layout() const;
+
+    void draw_photo_mode();
+    void draw_video_mode(bool is_recording, int64_t duration_ms,
                          bool finalizing, int finalize_pct);
 
     Canvas& canvas_;
@@ -37,7 +46,7 @@ private:
     enum class Mode { PHOTO, VIDEO };
     Mode mode_ = Mode::PHOTO;
     // The RAW-pipeline denoise/demosaic A/B toggles were retired from the UI; the
-    // chosen defaults now live in the pipeline (HQ demosaic + chroma denoise on).
+    // chosen defaults now live in the pipeline (see RawVideoPipeline's atomics).
 
     struct Rect { float x, y, w, h; };
     Rect shutter_btn_ = {0, 0, 0, 0};

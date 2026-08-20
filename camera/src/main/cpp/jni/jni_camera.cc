@@ -52,14 +52,27 @@ JNIEnv* env_for_thread(bool* detach) {
 // Loads an app class through the NativeActivity's class loader (FindClass alone
 // can't see app classes from arbitrary threads).
 jclass load_app_class(JNIEnv* env, jobject activity, const char* dotted_name) {
+    // Every local ref created here is released before returning: this runs on
+    // camera/worker threads whose local-ref table is not popped by a returning
+    // Java frame, so leaking three refs per call eventually overflows it.
     jclass activity_cls = env->GetObjectClass(activity);
+    if (!activity_cls) return nullptr;
     jmethodID get_cl = env->GetMethodID(activity_cls, "getClassLoader", "()Ljava/lang/ClassLoader;");
-    jobject loader = env->CallObjectMethod(activity, get_cl);
+    jobject loader = get_cl ? env->CallObjectMethod(activity, get_cl) : nullptr;
+    env->DeleteLocalRef(activity_cls);
+    if (!loader) return nullptr;
+
     jclass loader_cls = env->FindClass("java/lang/ClassLoader");
-    jmethodID load = env->GetMethodID(loader_cls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    jmethodID load = loader_cls ? env->GetMethodID(loader_cls, "loadClass",
+                                                  "(Ljava/lang/String;)Ljava/lang/Class;")
+                                : nullptr;
+    if (loader_cls) env->DeleteLocalRef(loader_cls);
+    if (!load) { env->DeleteLocalRef(loader); return nullptr; }
+
     jstring name = env->NewStringUTF(dotted_name);
     jclass cls = static_cast<jclass>(env->CallObjectMethod(loader, load, name));
     env->DeleteLocalRef(name);
+    env->DeleteLocalRef(loader);
     return cls;
 }
 
@@ -288,7 +301,10 @@ void host_finish_with_results(JavaVM* vm, jobject activity,
     JNIEnv* env = env_for_vm(vm, &detach);
     if (!env) return;
     jclass strCls = env->FindClass("java/lang/String");
+    if (!strCls) { if (detach) vm->DetachCurrentThread(); return; }
     jobjectArray arr = env->NewObjectArray(static_cast<jsize>(paths.size()), strCls, nullptr);
+    env->DeleteLocalRef(strCls);
+    if (!arr) { if (detach) vm->DetachCurrentThread(); return; }
     for (jsize i = 0; i < static_cast<jsize>(paths.size()); ++i) {
         jstring s = env->NewStringUTF(paths[i].c_str());
         env->SetObjectArrayElement(arr, i, s);
@@ -299,8 +315,7 @@ void host_finish_with_results(JavaVM* vm, jobject activity,
     if (m) env->CallVoidMethod(activity, m, arr);
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
     if (cls) env->DeleteLocalRef(cls);
-    env->DeleteLocalRef(arr);
-    if (strCls) env->DeleteLocalRef(strCls);
+    env->DeleteLocalRef(arr);   // strCls was already released above
     if (detach) vm->DetachCurrentThread();
 }
 

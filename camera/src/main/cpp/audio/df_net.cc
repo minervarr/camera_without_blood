@@ -160,8 +160,7 @@ std::vector<float> DfNet::process(const std::vector<float>& in, bool post_filter
     // DELAY internally; the final result is recovered by trimming [DELAY, DELAY+orig).
     std::vector<float> ap((size_t)DELAY + orig + FFT, 0.0f);
     std::copy(in.begin(), in.end(), ap.begin() + DELAY);
-    const int T = (int)((ap.size() - FFT) / HOP) + 1;
-    if (T <= 0) return {};
+    const int T = (int)((ap.size() - FFT) / HOP) + 1;   // >= 1 by construction (ap.size() >= DELAY + FFT)
 
     // ---- STFT + features (stateful normalization, run once over the whole clip).
     std::vector<cf>    spec((size_t)T * FREQS);
