@@ -161,6 +161,7 @@ add_library(camera_recorder SHARED
     camera/dng_writer.cc
     camera/dng_meta_source.cc
     camera/still_writer.cc
+    camera/raw_develop.cc
     camera/hdr_merge.cc
     camera/mtb_align.cc
 
@@ -252,6 +253,7 @@ target_link_libraries(camera_recorder
     vulkan
     android
     log
+    z          # zlib: 16-bit PNG deflate (still_writer)
     EGL
     GLESv3
 )

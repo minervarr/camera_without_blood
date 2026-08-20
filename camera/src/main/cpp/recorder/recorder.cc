@@ -1,5 +1,7 @@
 #include "recorder.hh"
 #include "../camera/ndk_session.hh"
+#include "../camera/raw_develop.hh"
+#include "../camera/still_writer.hh"
 #include "../audio/audio_capture.hh"
 #include "../muxer/muxer.hh"
 #include "../muxer/hevc_bitstream.hh"
@@ -308,6 +310,46 @@ bool Recorder::start_preview(Renderer* renderer) {
             if (pm == 0 /*FAST*/ || pm == 2 /*STATIC + RAW set*/) {
                 if (dng::write_dng(path, data, m)) jni::session_record_file(path);
                 else LOGE("Failed to write still DNG: %s", path);
+
+                // A viewable copy next to the archival DNG: same RAW data,
+                // developed to 16-bit sRGB and saved as a lossless PNG. Nothing
+                // is thrown away that 8 bits would have discarded, and no extra
+                // camera stream is involved — a 3-stream preview+RAW+YUV combo
+                // is not guaranteed, and this stays consistent with the DNG by
+                // construction.
+                //
+                // Off the camera thread: develop + deflate of a 12 MP frame runs
+                // in seconds, and blocking here would stall capture (the same
+                // reason the non-RAW YUV->PNG path has a worker).
+                std::string png_path = path;
+                const size_t dot = png_path.rfind('.');
+                if (dot != std::string::npos) png_path.resize(dot);
+                png_path += ".png";
+
+                std::vector<uint16_t> bayer(static_cast<size_t>(w) * h);
+                const int src_stride_px = stride > 0 ? stride / 2 : w;
+                for (int row = 0; row < h; ++row)
+                    std::memcpy(&bayer[static_cast<size_t>(row) * w],
+                                data + static_cast<size_t>(row) * src_stride_px,
+                                static_cast<size_t>(w) * sizeof(uint16_t));
+
+                float nv[3] = {1.0f, 1.0f, 1.0f};
+                if (neutral) for (int i = 0; i < 3; ++i) nv[i] = neutral[i];
+
+                dng::DngMeta pm_meta = m;
+                enqueue_bracket_job([this, png_path, bayer = std::move(bayer),
+                                     w, h, pm_meta, nv] {
+                    std::vector<uint16_t> rgb;
+                    if (!cam::develop_raw_to_rgb16(bayer.data(), w, h,
+                                                   w * int(sizeof(uint16_t)),
+                                                   pm_meta, nv, rgb)) {
+                        LOGE("RAW develop failed for %s", png_path.c_str());
+                        return;
+                    }
+                    if (cam::write_png_rgb16(png_path, rgb.data(), w, h,
+                                             pm_meta.orientation_deg))
+                        jni::session_record_file(png_path);
+                });
             }
             // 2) Accumulate for the merge; produces the merged output when complete.
             accumulate_bracket(path, data, w, h, stride, neutral, black, white,

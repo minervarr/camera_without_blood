@@ -453,9 +453,19 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
                 const float black[4] = {
                     self->static_meta_.black_level[0], self->static_meta_.black_level[1],
                     self->static_meta_.black_level[2], self->static_meta_.black_level[3] };
+                float neutral[3] = {1.0f, 1.0f, 1.0f};
+                const bool has_neutral =
+                    self->have_neutral_.load(std::memory_order_acquire);
+                if (has_neutral)
+                    for (int k = 0; k < 3; ++k)
+                        neutral[k] = self->last_neutral_[k].load(std::memory_order_relaxed);
+                else
+                    LOGE("ndk: still with no as-shot neutral - it will develop green");
+
                 self->raw_sink_.on_raw(path.c_str(),
                                        reinterpret_cast<const uint16_t*>(data), w, h, stride,
-                                       nullptr, black, self->static_meta_.white_level,
+                                       has_neutral ? neutral : nullptr,
+                                       black, self->static_meta_.white_level,
                                        0, 0, index, total);
             }
         }
@@ -466,19 +476,27 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
 void Session::on_capture_completed(void* ctx, ACameraCaptureSession*,
                                    ACaptureRequest*, const ACameraMetadata* result) {
     auto* self = static_cast<Session*>(ctx);
-    if (!self->recording_.load(std::memory_order_acquire)) return;
-    if (self->neutral_sent_.load(std::memory_order_acquire)) return;
 
     ACameraMetadata_const_entry e{};
     if (ACameraMetadata_getConstEntry(result, ACAMERA_SENSOR_NEUTRAL_COLOR_POINT, &e) != ACAMERA_OK
         || e.count < 3)
         return;
-    // Reported as rationals; the ISP wants plain camera-space gains.
+    // Reported as rationals; consumers want plain camera-space values.
     float neutral[3];
     for (int i = 0; i < 3; ++i) {
         const int32_t num = e.data.r[i].numerator, den = e.data.r[i].denominator;
         neutral[i] = den ? float(num) / float(den) : 1.0f;
     }
+
+    // Keep the latest unconditionally — stills are shot while previewing, not
+    // recording, and a still with no neutral develops green.
+    for (int i = 0; i < 3; ++i)
+        self->last_neutral_[i].store(neutral[i], std::memory_order_relaxed);
+    self->have_neutral_.store(true, std::memory_order_release);
+
+    // The video path wants exactly one per clip, taken once AWB is locked.
+    if (!self->recording_.load(std::memory_order_acquire)) return;
+    if (self->neutral_sent_.load(std::memory_order_acquire)) return;
     if (self->raw_video_sink_.on_neutral) self->raw_video_sink_.on_neutral(neutral);
     self->neutral_sent_.store(true, std::memory_order_release);
     LOGI("ndk: locked neutral %.4f %.4f %.4f", neutral[0], neutral[1], neutral[2]);

@@ -133,6 +133,13 @@ private:
     std::atomic<bool> recording_{false};
     std::atomic<bool> neutral_sent_{false};
 
+    // Most recent as-shot neutral from the capture results. Stills need it as
+    // much as video does: without it a developed RAW has no white balance and
+    // comes out green, because a Bayer sensor is about twice as sensitive in
+    // green. Written on the camera callback thread, read there too.
+    std::atomic<bool>  have_neutral_{false};
+    std::atomic<float> last_neutral_[3]{ {1.0f}, {1.0f}, {1.0f} };
+
     // Still-burst state. `still_paths_` is a FIFO so a burst cannot mislabel
     // its frames (same reason the Java YUV path kept one).
     std::mutex               still_mtx_;

@@ -3,6 +3,9 @@
 #include "../logger.hh"
 
 #include <vector>
+#include <cstdio>
+
+#include <zlib.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../third_party/stb_image_write.h"
@@ -86,3 +89,118 @@ bool write_png_yuv420(const std::string& path,
 }
 
 } // namespace cam
+
+// ── 16-bit PNG ───────────────────────────────────────────────────────────────
+
+namespace {
+
+void put_u32(std::vector<uint8_t>& v, uint32_t x) {
+    v.push_back(uint8_t(x >> 24)); v.push_back(uint8_t(x >> 16));
+    v.push_back(uint8_t(x >> 8));  v.push_back(uint8_t(x));
+}
+
+void put_chunk(std::vector<uint8_t>& out, const char tag[4],
+               const uint8_t* data, size_t len) {
+    put_u32(out, static_cast<uint32_t>(len));
+    const size_t crc_start = out.size();
+    out.insert(out.end(), tag, tag + 4);
+    if (len) out.insert(out.end(), data, data + len);
+    const uLong crc = crc32(crc32(0L, Z_NULL, 0),
+                            out.data() + crc_start,
+                            static_cast<uInt>(out.size() - crc_start));
+    put_u32(out, static_cast<uint32_t>(crc));
+}
+
+} // namespace
+
+bool cam::write_png_rgb16(const std::string& path,
+                          const uint16_t* rgb16, int width, int height,
+                          int orientation_deg) {
+    if (!rgb16 || width <= 0 || height <= 0) return false;
+
+    // Bake the sensor orientation into the pixels.
+    const bool swap_wh = (orientation_deg == 90 || orientation_deg == 270);
+    const int ow = swap_wh ? height : width;
+    const int oh = swap_wh ? width  : height;
+
+    // Raw scanlines: one filter byte + ow*3 big-endian shorts per row.
+    // Filter 1 (Sub) predicts each byte from the one bpp positions to its left,
+    // which on photographic data compresses far better than no filter and costs
+    // one subtract. It is exactly reversible, so the image stays lossless.
+    const size_t bpp = 6;                       // bytes per pixel, 16-bit RGB
+    const size_t row_bytes = static_cast<size_t>(ow) * bpp;
+    std::vector<uint8_t> raw(static_cast<size_t>(oh) * (row_bytes + 1));
+    std::vector<uint8_t> plain(row_bytes);
+
+    for (int y = 0; y < oh; ++y) {
+        uint8_t* line = raw.data() + static_cast<size_t>(y) * (row_bytes + 1);
+        *line = 1;                              // filter: Sub
+
+        for (int x = 0; x < ow; ++x) {
+            // Source pixel for this output pixel, with the sensor rotation
+            // applied. PNG has no orientation tag, so it goes into the pixels.
+            int sx, sy;
+            switch (orientation_deg) {
+                case 90:  sx = y;             sy = height - 1 - x; break;
+                case 180: sx = width - 1 - x; sy = height - 1 - y; break;
+                case 270: sx = width - 1 - y; sy = x;              break;
+                default:  sx = x;             sy = y;              break;
+            }
+            const uint16_t* src = rgb16 + (static_cast<size_t>(sy) * width + sx) * 3;
+            uint8_t* o = plain.data() + static_cast<size_t>(x) * bpp;
+            for (int k = 0; k < 3; ++k) {
+                o[k * 2]     = uint8_t(src[k] >> 8);   // PNG samples are big-endian
+                o[k * 2 + 1] = uint8_t(src[k] & 0xFF);
+            }
+        }
+
+        // Sub is defined against the *unfiltered* bytes of the same row, so it
+        // has to run over the assembled row, not in place while building it.
+        uint8_t* dst = line + 1;
+        for (size_t i = 0; i < row_bytes; ++i) {
+            const uint8_t left = (i >= bpp) ? plain[i - bpp] : 0;
+            dst[i] = static_cast<uint8_t>(plain[i] - left);
+        }
+    }
+
+    uLongf comp_cap = compressBound(static_cast<uLong>(raw.size()));
+    std::vector<uint8_t> comp(comp_cap);
+    if (compress2(comp.data(), &comp_cap, raw.data(),
+                  static_cast<uLong>(raw.size()), Z_BEST_SPEED) != Z_OK) {
+        LOGE("PNG deflate failed for %s", path.c_str());
+        return false;
+    }
+    comp.resize(comp_cap);
+
+    std::vector<uint8_t> png;
+    const uint8_t sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    png.insert(png.end(), sig, sig + 8);
+
+    uint8_t ihdr[13];
+    ihdr[0] = uint8_t(ow >> 24); ihdr[1] = uint8_t(ow >> 16);
+    ihdr[2] = uint8_t(ow >> 8);  ihdr[3] = uint8_t(ow);
+    ihdr[4] = uint8_t(oh >> 24); ihdr[5] = uint8_t(oh >> 16);
+    ihdr[6] = uint8_t(oh >> 8);  ihdr[7] = uint8_t(oh);
+    ihdr[8]  = 16;   // bit depth
+    ihdr[9]  = 2;    // colour type: truecolour RGB
+    ihdr[10] = 0;    // deflate
+    ihdr[11] = 0;    // adaptive filtering
+    ihdr[12] = 0;    // no interlace
+    put_chunk(png, "IHDR", ihdr, sizeof(ihdr));
+
+    // sRGB rendering intent: the develop step encodes sRGB, so say so.
+    const uint8_t srgb_intent = 0;   // perceptual
+    put_chunk(png, "sRGB", &srgb_intent, 1);
+
+    put_chunk(png, "IDAT", comp.data(), comp.size());
+    put_chunk(png, "IEND", nullptr, 0);
+
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) { LOGE("cannot open %s", path.c_str()); return false; }
+    const size_t wrote = std::fwrite(png.data(), 1, png.size(), f);
+    std::fclose(f);
+    if (wrote != png.size()) { LOGE("short write for %s", path.c_str()); return false; }
+
+    LOGI("wrote 16-bit PNG %s (%dx%d, %zu bytes)", path.c_str(), ow, oh, png.size());
+    return true;
+}
