@@ -118,13 +118,6 @@ add_library(EBML::ebml ALIAS ebml)
 set(CMAKE_DISABLE_FIND_PACKAGE_EBML ON)
 add_subdirectory(${THIRDPARTY_DIR}/libmatroska ${CMAKE_BINARY_DIR}/libmatroska)
 
-#  NCNN
-set(NCNN_VULKAN ON CACHE BOOL "" FORCE)
-set(NCNN_DISABLE_EXCEPTION OFF CACHE BOOL "" FORCE)
-set(NCNN_DISABLE_RTTI OFF CACHE BOOL "" FORCE)
-set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
-add_subdirectory(${THIRDPARTY_DIR}/ncnn ${CMAKE_BINARY_DIR}/ncnn)
-
 # ── Shader compilation (slangc from Vulkan SDK) ───────────────────────────────
 # Reusable Slang→SPIR-V helper provided by the canvas library. Override the
 # compiler path with -DVCE_SLANGC=/path/to/slangc if the Vulkan SDK is elsewhere.
@@ -148,6 +141,12 @@ vce_compile_slang(compile_font_shaders ${SHADER_OUT_DIR}
 vce_compile_slang(compile_canvas_shaders ${SHADER_OUT_DIR}
     ${CANVAS_DIR}/shaders_src
     overlay_vert overlay_frag image_vert image_frag shape_vert shape_frag)
+# RAW video ISP compute shaders (this project's own). RawVideoPipeline loads
+# these by name from assets/shaders, so a missing rule here fails the pipeline at
+# init() rather than at build time — keep this list in sync with build_vulkan().
+vce_compile_slang(compile_isp_shaders ${SHADER_OUT_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/isp/shaders_src
+    nlm_bayer nlm_bayer_fp16 green_isp debayer_isp chroma_denoise)
 
 # ── Main shared library ───────────────────────────────────────────────────────
 add_library(camera_recorder SHARED
@@ -157,7 +156,7 @@ add_library(camera_recorder SHARED
     logger.cc
 
     # Camera2 NDK
-    camera/camera.cc
+    camera/ndk_session.cc
     camera/dng_writer.cc
     camera/dng_meta_source.cc
     camera/still_writer.cc
@@ -165,7 +164,6 @@ add_library(camera_recorder SHARED
     camera/mtb_align.cc
 
     # ISP (Video Pipeline) — compute_context is WIP in canvas lib, compiled here
-    isp/ai_denoiser.cc
     isp/frame_store.cc
     isp/raw_video_pipeline.cc
     ${CANVAS_DIR}/core/compute_context.cc
@@ -205,7 +203,7 @@ add_library(camera_recorder SHARED
     ${NATIVE_GLUE}/android_native_app_glue.c
 )
 
-add_dependencies(camera_recorder compile_font_shaders compile_canvas_shaders)
+add_dependencies(camera_recorder compile_font_shaders compile_canvas_shaders compile_isp_shaders)
 
 target_include_directories(camera_recorder PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -224,7 +222,6 @@ target_include_directories(camera_recorder PRIVATE
     ${THIRDPARTY_DIR}/libebml
     ${THIRDPARTY_DIR}/libmatroska
     ${THIRDPARTY_DIR}/flac/include
-    ${THIRDPARTY_DIR}/ncnn/src
 )
 
 target_compile_options(camera_recorder PRIVATE -O2)
@@ -235,8 +232,6 @@ target_link_libraries(camera_recorder
     # Platform abstraction (app_shell Android host)
     app_shell
     app_shell_android
-    # AI Noise Reduction
-    ncnn
     # Audio and DSP
     FLAC
     kiss_fft

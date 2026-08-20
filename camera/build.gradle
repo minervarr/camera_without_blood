@@ -53,6 +53,22 @@ android {
     }
 }
 
+// The Slang -> SPIR-V shader compilation is driven by CMake (vce_compile_slang),
+// which writes the .spv files into src/main/assets/shaders. Gradle's asset merge
+// has no idea those files are generated, so on a CLEAN clone it runs first,
+// packages whatever is already on disk (nothing), and ships an APK missing every
+// shader — the canvas ones fail loudly, but the ISP ones just make
+// RawVideoPipeline::init() return false and the RAW path silently disappear.
+// A second build then "fixes" it, which is how this stays invisible.
+//
+// Forcing the merge to wait on the native build closes that hole.
+afterEvaluate {
+    def nativeBuild = tasks.matching { it.name ==~ /buildCMake.*/ }
+    tasks.matching { it.name ==~ /merge.*Assets/ }.configureEach {
+        dependsOn nativeBuild
+    }
+}
+
 dependencies {
     // audio_engine's Java is exposed as its own coordinate so a host that also
     // uses it gets a single copy (Gradle dedup). The audio *native* (usb_audio +
