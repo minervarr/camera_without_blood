@@ -1,5 +1,5 @@
 #include "recorder.hh"
-#include "../camera/camera.hh"
+#include "../camera/ndk_session.hh"
 #include "../audio/audio_capture.hh"
 #include "../muxer/muxer.hh"
 #include "../muxer/hevc_bitstream.hh"
@@ -26,7 +26,6 @@ namespace rec {
 Recorder::Recorder(AAssetManager* assets, JavaVM* vm, jobject activity)
     : assets_(assets)
     , vm_(vm)
-    , camera_(std::make_unique<cam::Camera>())
     , audio_ (std::make_unique<aud::AudioCapture>())
     , muxer_ (std::make_unique<mux::Muxer>())
 {
@@ -43,8 +42,8 @@ Recorder::~Recorder() {
     // A background finalize may still be draining the NLM backlog into the file —
     // wait for it (and its use of our members) to complete before we tear down.
     if (finalize_thread_.joinable()) finalize_thread_.join();
-    // An HDR bracket merge may still be running on its own thread.
-    if (bracket_worker_.joinable()) bracket_worker_.join();
+    // An HDR bracket merge may still be queued/running on the worker thread.
+    stop_bracket_worker();
     if (vm_ && activity_) {
         JNIEnv* env = nullptr;
         if (vm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK && env)
@@ -86,6 +85,10 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
     f.exposure_ns = exposure_ns; f.iso = iso; f.white = white;
     if (black)   for (int i = 0; i < 4; ++i) f.black[i]   = black[i];
     if (neutral) for (int i = 0; i < 3; ++i) f.neutral[i] = neutral[i];
+    if (w <= 0 || h <= 0 || stride < w * 2) {
+        LOGE("bracket frame %d: bad geometry %dx%d stride=%d — dropped", index, w, h, stride);
+        return;
+    }
     f.data.resize(static_cast<size_t>(w) * h);
     const int row_px = stride / 2;
     for (int y = 0; y < h; ++y)
@@ -104,8 +107,7 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
     bracket_base_.clear();                    // `base` (above) holds the output base
     const dng::DngMeta meta = raw_meta_;     // static tags (CFA, colour matrices)
 
-    if (bracket_worker_.joinable()) bracket_worker_.join();  // serialize bursts
-    bracket_worker_ = std::thread(
+    enqueue_bracket_job(
         [frames = std::move(frames), meta, base]() mutable {
             // Static HDR: merge the bracket into one Bayer DNG (kept RAW; the user
             // develops the HDR on a PC). Reached only for the 3-shot Static modes.
@@ -114,6 +116,46 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
             const std::string out = base + ".dng";
             if (hdr::write_merged_dng(r, out)) jni::session_record_file(out);
         });
+}
+
+// Single consumer: keeps bursts strictly serialized (they share the output
+// naming) while never blocking the producer, which is the camera callback.
+void Recorder::bracket_worker_loop() {
+    for (;;) {
+        std::function<void()> job;
+        {
+            std::unique_lock<std::mutex> lk(bracket_jobs_mtx_);
+            bracket_jobs_cv_.wait(lk, [this] {
+                return bracket_quit_ || !bracket_jobs_.empty();
+            });
+            if (bracket_jobs_.empty()) return;   // quit requested and drained
+            job = std::move(bracket_jobs_.front());
+            bracket_jobs_.pop_front();
+        }
+        job();
+    }
+}
+
+void Recorder::enqueue_bracket_job(std::function<void()> job) {
+    {
+        std::lock_guard<std::mutex> lk(bracket_jobs_mtx_);
+        if (bracket_quit_) return;
+        bracket_jobs_.push_back(std::move(job));
+        if (!bracket_worker_.joinable())
+            bracket_worker_ = std::thread(&Recorder::bracket_worker_loop, this);
+    }
+    bracket_jobs_cv_.notify_one();
+}
+
+// Drains whatever is queued (a merged DNG the user already shot must still land
+// on disk), then joins.
+void Recorder::stop_bracket_worker() {
+    {
+        std::lock_guard<std::mutex> lk(bracket_jobs_mtx_);
+        bracket_quit_ = true;
+    }
+    bracket_jobs_cv_.notify_all();
+    if (bracket_worker_.joinable()) bracket_worker_.join();
 }
 
 // First codec config from whichever pipeline is active: build hvcC and open
@@ -160,12 +202,29 @@ void Recorder::on_video_format(const uint8_t* csd, int len, int w, int h) {
     }
 }
 
+// Reuses a retired packet buffer when one is available, so the steady state does
+// no allocation at all. Caller holds video_q_mtx_.
+std::vector<uint8_t> Recorder::take_pkt_buffer(const uint8_t* data, int len) {
+    std::vector<uint8_t> buf;
+    if (!pkt_pool_.empty()) {
+        buf = std::move(pkt_pool_.back());
+        pkt_pool_.pop_back();
+        buf.clear();                       // keeps the capacity
+    }
+    buf.insert(buf.end(), data, data + len);
+    return buf;
+}
+
+void Recorder::recycle_pkt_buffer(std::vector<uint8_t>&& buf) {
+    if (pkt_pool_.size() < kPktPoolMax) pkt_pool_.push_back(std::move(buf));
+}
+
 // Each access unit: copy onto the mux queue and return immediately so the
 // encoder drain thread never blocks on muxer disk I/O.
 void Recorder::on_video_packet(const uint8_t* data, int len, int64_t pts_us, bool key) {
     {
         std::lock_guard<std::mutex> lk(video_q_mtx_);
-        video_q_.push(MuxPkt{ std::vector<uint8_t>(data, data + len), pts_us, key, /*is_audio*/false });
+        video_q_.push(MuxPkt{ take_pkt_buffer(data, len), pts_us, key, /*is_audio*/false });
     }
     video_q_cv_.notify_one();
 }
@@ -200,20 +259,6 @@ void Recorder::choose_video_mode() {
          video_mode_ == VideoMode::RAW_PQ ? "RAW -> native ISP (PQ)" : "legacy HLG10");
 }
 
-void Recorder::negotiate_codec() {
-    // Try hardware HEVC first, fall back to AVC.
-    // AMediaCodec_createEncoderByType returns nullptr if unavailable.
-    AMediaCodec* test = AMediaCodec_createEncoderByType("video/hevc");
-    if (test) {
-        AMediaCodec_delete(test);
-        video_codec_id_ = "V_MPEGH/ISO/HEVC";
-        LOGI("Codec: HEVC (hardware)");
-    } else {
-        video_codec_id_ = "V_MPEG4/ISO/AVC";
-        LOGI("Codec: AVC (fallback)");
-    }
-}
-
 bool Recorder::start_preview(Renderer* renderer) {
     if (state_ != State::IDLE) return false;
     if (!vm_ || !activity_) { last_error_ = "No JNI context"; return false; }
@@ -223,8 +268,8 @@ bool Recorder::start_preview(Renderer* renderer) {
     // Construct the Java HdrCameraSession once. Preview frames arrive as
     // AHardwareBuffers and are composited by the renderer; the release closure
     // returns the backing Image to the camera pool when the renderer is done.
-    if (!jni_ready_) {
-        jni::PreviewSink preview{};
+    jni::PreviewSink preview{};
+    {
         preview.on_frame = [this](AHardwareBuffer* hb, std::function<void()> release) {
             std::lock_guard<std::mutex> lock(renderer_mutex_);
             if (renderer_) renderer_->update_camera_frame(hb, std::move(release));
@@ -280,19 +325,46 @@ bool Recorder::start_preview(Renderer* renderer) {
             if (raw_pipeline_) raw_pipeline_->set_neutral(neutral);
         };
 
-        if (!jni::hdr_init(vm_, activity_, preview, record, raw, raw_video)) {
-            last_error_ = "Failed to init HdrCameraSession";
-            return false;
+        // The Java session is still constructed unconditionally: it owns the USB
+        // DAC permission flow (UsbManager has no NDK equivalent) and remains the
+        // capture path for devices the native session can't serve.
+        if (!jni_ready_) {
+            if (!jni::hdr_init(vm_, activity_, preview, record, raw, raw_video)) {
+                last_error_ = "Failed to init HdrCameraSession";
+                return false;
+            }
+            jni_ready_ = true;
         }
-        jni_ready_ = true;
+        pending_raw_sink_       = raw;
+        pending_raw_video_sink_ = raw_video;
     }
 
-    // Decide RAW-vs-legacy before the Java session builds its capture session;
-    // raw mode changes the stream configuration (preview + RAW16, no encoder).
+    // Decide RAW-vs-legacy before the session is built; raw mode changes the
+    // stream configuration (preview + RAW16, no encoder).
     choose_video_mode();
-    jni::hdr_set_raw_video(video_mode_ == VideoMode::RAW_PQ);
 
-    jni::hdr_start_preview();
+    // Prefer the native NDK session for the RAW path. Nothing in it needs Java:
+    // the one Java-only Camera2 API (setDynamicRangeProfile / HLG10) belongs to
+    // the legacy path. If the device can't serve it, available() is false and we
+    // fall back to Java rather than failing the preview.
+    use_ndk_ = false;
+    if (video_mode_ == VideoMode::RAW_PQ) {
+        if (!ndk_session_) ndk_session_ = std::make_unique<ndkcam::Session>();
+        if (ndk_session_->init(preview, pending_raw_sink_, pending_raw_video_sink_) &&
+            ndk_session_->start_preview()) {
+            use_ndk_ = true;
+            LOGI("Capture session: native NDK Camera2 (RAW)");
+        } else {
+            ndk_session_->shutdown();
+            ndk_session_.reset();
+            LOGI("Capture session: Java fallback (native RAW session unavailable)");
+        }
+    }
+    if (!use_ndk_) {
+        jni::hdr_set_raw_video(video_mode_ == VideoMode::RAW_PQ);
+        jni::hdr_start_preview();
+    }
+
     // Prompt for USB DAC access now so the fd is ready by the time we record.
     jni::hdr_request_usb();
     state_ = State::PREVIEW;
@@ -305,7 +377,16 @@ void Recorder::stop_preview() {
     }
     if (state_ == State::IDLE) return;
 
-    jni::hdr_stop_preview();
+    if (use_ndk_ && ndk_session_) {
+        // Fully release the camera, not just the repeating request: leaving the
+        // ACameraDevice open holds the HAL against every other client (including
+        // this app's next start_preview) until the process dies.
+        ndk_session_->shutdown();
+        ndk_session_.reset();
+        use_ndk_ = false;
+    } else {
+        jni::hdr_stop_preview();
+    }
 
     {
         std::lock_guard<std::mutex> lock(renderer_mutex_);
@@ -328,13 +409,9 @@ bool Recorder::start_saving(const std::string& output_path) {
     // A prior recording's finalize must be fully done before reusing the pipeline.
     if (finalize_thread_.joinable()) finalize_thread_.join();
 
-    // RAW mode: spin up the native ISP/encoder before frames start flowing. The
-    // frame store spills overflow next to the output file (chunks are deleted as
-    // they're consumed).
+    // RAW mode: spin up the native ISP/encoder before frames start flowing.
     if (video_mode_ == VideoMode::RAW_PQ) {
-        auto slash = output_path.find_last_of('/');
-        std::string spill_dir = (slash == std::string::npos) ? "." : output_path.substr(0, slash);
-        if (!raw_pipeline_ || !raw_pipeline_->start(spill_dir)) {
+        if (!raw_pipeline_ || !raw_pipeline_->start()) {
             last_error_ = "RAW pipeline start failed";
             LOGE("%s", last_error_.c_str());
             return false;
@@ -359,12 +436,20 @@ bool Recorder::start_saving(const std::string& output_path) {
         // clip's audio is cheap.
         std::deque<MuxPkt> audio_buf;
         int64_t max_video_ns = INT64_MIN;
+        // Hoisted out of the loop: annexb_to_length_prefixed clears but does not
+        // shrink, so one buffer serves every frame after the first.
+        std::vector<uint8_t> framed;
+        auto recycle = [this](std::vector<uint8_t>&& buf) {
+            std::lock_guard<std::mutex> lk(video_q_mtx_);
+            recycle_pkt_buffer(std::move(buf));
+        };
         auto flush_audio_upto = [&](int64_t upto_ns) {
             while (!audio_buf.empty() && audio_buf.front().ts <= upto_ns) {
                 MuxPkt a = std::move(audio_buf.front());
                 audio_buf.pop_front();
                 if (muxer_opened_)
                     muxer_->write_audio(a.data.data(), static_cast<int>(a.data.size()), a.ts);
+                recycle(std::move(a.data));
             }
         };
         for (;;) {
@@ -377,13 +462,20 @@ bool Recorder::start_saving(const std::string& output_path) {
                 video_q_.pop();
             }
             if (pkt.is_audio) { audio_buf.push_back(std::move(pkt)); continue; }  // emit later, gated by video PTS
-            if (!muxer_opened_) continue;   // muxer stays open until after we join
+            if (!muxer_opened_) { recycle(std::move(pkt.data)); continue; }  // muxer stays open until after we join
             const int64_t v_ns = pkt.ts * 1000;          // video MuxPkt.ts is microseconds
             if (v_ns > max_video_ns) max_video_ns = v_ns;
             flush_audio_upto(max_video_ns);              // all audio up to this video frame, in order
-            std::vector<uint8_t> framed;
             hevc::annexb_to_length_prefixed(pkt.data.data(), static_cast<int>(pkt.data.size()), framed);
-            muxer_->write_video(framed.data(), static_cast<int>(framed.size()), v_ns, pkt.key);
+            if (framed.empty()) {
+                // No NAL survived the split: the packet had no start code at all.
+                // Silently dropping it used to lose a frame with no trace.
+                LOGE("video packet (%zu B, pts %lld us) contained no NAL — dropped",
+                     pkt.data.size(), static_cast<long long>(pkt.ts));
+            } else {
+                muxer_->write_video(framed.data(), static_cast<int>(framed.size()), v_ns, pkt.key);
+            }
+            recycle(std::move(pkt.data));
         }
         flush_audio_upto(INT64_MAX);   // drained: write any audio tail past the last video frame
     });
@@ -416,7 +508,7 @@ bool Recorder::start_saving(const std::string& output_path) {
             // bitrates). ts is already nanoseconds.
             {
                 std::lock_guard<std::mutex> lk(video_q_mtx_);
-                video_q_.push(MuxPkt{ std::vector<uint8_t>(data, data + bytes), ts, false, /*is_audio*/true });
+                video_q_.push(MuxPkt{ take_pkt_buffer(data, bytes), ts, false, /*is_audio*/true });
             }
             video_q_cv_.notify_one();
         });
@@ -437,7 +529,8 @@ bool Recorder::start_saving(const std::string& output_path) {
     // Start frame delivery. Legacy: the Java MediaCodec encoder. RAW mode: the
     // Java session just adds the RAW16 stream to the repeating request and the
     // frames land in raw_pipeline_.
-    jni::hdr_start_recording();
+    if (use_ndk_ && ndk_session_) ndk_session_->start_recording();
+    else                          jni::hdr_start_recording();
 
     state_ = State::SAVING;
     LOGI("Recording started (%s): %s",
@@ -448,7 +541,9 @@ bool Recorder::start_saving(const std::string& output_path) {
 void Recorder::stop_saving() {
     if (state_ != State::SAVING) return;
 
-    jni::hdr_stop_recording();   // stops frame delivery (and the Java encoder, legacy mode)
+    // stops frame delivery (and the Java encoder, legacy mode)
+    if (use_ndk_ && ndk_session_) ndk_session_->stop_recording();
+    else                          jni::hdr_stop_recording();
 
     audio_->stop();              // audio capture is real-time — it's complete at Stop
     audio_->close();
@@ -507,12 +602,15 @@ bool Recorder::take_photo(const std::string& output_path) {
     if (dot != std::string::npos) base.erase(dot);
     // FAST = single raw shot; STATIC modes = 3-shot exposure bracket.
     const int shots = (photo_output_mode_.load() == 0 /*FAST*/) ? 1 : 3;
-    jni::hdr_take_photo(base.c_str(), shots);
+    if (use_ndk_ && ndk_session_) ndk_session_->take_photo(base.c_str(), shots);
+    else                          jni::hdr_take_photo(base.c_str(), shots);
     return true;
 }
 
 void Recorder::set_photo_mode(bool photo) {
-    if (jni_ready_) jni::hdr_set_photo_mode(photo);
+    // Photo/video is a session split only on the legacy path; the RAW session
+    // shoots stills from the same RAW16 stream it previews with.
+    if (jni_ready_ && !use_ndk_) jni::hdr_set_photo_mode(photo);
 }
 
 void Recorder::set_renderer(Renderer* renderer) {
@@ -526,10 +624,6 @@ void Recorder::set_denoise(bool on) {
 
 void Recorder::set_demosaic_hq(bool on) {
     if (raw_pipeline_) raw_pipeline_->set_demosaic_hq(on);
-}
-
-void Recorder::set_temporal(bool on) {
-    if (raw_pipeline_) raw_pipeline_->set_temporal(on);
 }
 
 void Recorder::set_chroma(bool on) {

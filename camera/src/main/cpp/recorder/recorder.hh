@@ -8,6 +8,11 @@
 #include <mutex>
 #include <vector>
 #include <queue>
+#include <deque>
+#include <functional>
+
+// Pulls in ndkcam::Session and the jni:: sink types the members below use.
+#include "../camera/ndk_session.hh"
 #include <thread>
 #include <condition_variable>
 
@@ -69,7 +74,6 @@ public:
     // Physical device orientation (deg) captured when recording starts. Stored
     // for a future orientation tag in the output (muxer is currently a stub).
     void        set_capture_orientation(int deg) { capture_orientation_ = deg; }
-    int         capture_orientation() const { return capture_orientation_; }
 
     State       state()    const { return state_.load(); }
     VideoMode   video_mode() const { return video_mode_; }
@@ -87,16 +91,11 @@ public:
     // comparison). No-op in legacy mode. Toggle between recordings.
     void set_demosaic_hq(bool on);
 
-    // Toggles the RAW pipeline's motion-adaptive spatial-temporal denoise (A/B
-    // comparison; on by default). No-op in legacy mode. Toggle between recordings.
-    void set_temporal(bool on);
-
     // Toggles the RAW pipeline's chroma-only spatial denoise (A/B comparison).
     // Luma stays byte-identical. No-op in legacy mode. Toggle between recordings.
     void set_chroma(bool on);
 
 private:
-    void negotiate_codec();
     void choose_video_mode();
     // Shared by both pipelines: first codec config opens the muxer; packets
     // are queued for the writer thread.
@@ -117,7 +116,12 @@ private:
     Renderer*      renderer_ = nullptr;
     mutable std::mutex renderer_mutex_;   // guards renderer_ (read on camera thread)
 
-    std::unique_ptr<cam::Camera>      camera_;
+    // Native NDK capture session, used for the RAW path when the device can
+    // serve it (see start_preview). Null means the Java session is driving.
+    std::unique_ptr<ndkcam::Session>  ndk_session_;
+    bool                              use_ndk_ = false;
+    jni::RawSink                      pending_raw_sink_{};
+    jni::RawVideoSink                 pending_raw_video_sink_{};
     std::unique_ptr<aud::AudioCapture> audio_;
     std::unique_ptr<mux::Muxer>       muxer_;
     std::unique_ptr<isp::RawVideoPipeline> raw_pipeline_;
@@ -144,6 +148,15 @@ private:
     // microseconds for video (converted at write); `key` is video-only.
     struct MuxPkt { std::vector<uint8_t> data; int64_t ts; bool key; bool is_audio; };
     std::queue<MuxPkt>      video_q_;
+    // Consumed packet buffers, recycled back to the producers. At RAW-PQ bitrates
+    // a video access unit is ~1 MB and arrives 30x a second on the encoder drain
+    // thread; allocating a fresh vector per packet churned the allocator right
+    // next to the code path that must not stall.
+    std::vector<std::vector<uint8_t>> pkt_pool_;
+    // Both are guarded by video_q_mtx_. Call with the lock held.
+    std::vector<uint8_t> take_pkt_buffer(const uint8_t* data, int len);
+    void                 recycle_pkt_buffer(std::vector<uint8_t>&& buf);
+    static constexpr size_t kPktPoolMax = 24;
     std::mutex              video_q_mtx_;
     std::condition_variable video_q_cv_;
     std::thread             video_writer_;
@@ -161,6 +174,17 @@ private:
 
     // RAW still HDR bracket: frames accumulate here until the burst is complete,
     // then merge_raw_bracket() runs on bracket_worker_ (off the camera thread).
+    // The worker is a single long-lived consumer of bracket_jobs_ — it both keeps
+    // bursts serialized and keeps the camera thread from ever blocking on a
+    // merge in progress (a plain join() there stalled capture for hundreds of ms).
+    void bracket_worker_loop();
+    void enqueue_bracket_job(std::function<void()> job);
+    void stop_bracket_worker();
+
+    std::deque<std::function<void()>> bracket_jobs_;
+    std::mutex                        bracket_jobs_mtx_;
+    std::condition_variable           bracket_jobs_cv_;
+    bool                              bracket_quit_ = false;
     std::vector<hdr::BracketFrame> bracket_frames_;
     std::string                    bracket_base_;     // merged output base (no _idx.dng)
     int                            bracket_count_ = 0;// expected frames in the burst
@@ -169,7 +193,6 @@ private:
     std::thread                    bracket_worker_;
 
     // Codec negotiation result
-    const char* video_codec_id_ = nullptr;  // "V_MPEGH/ISO/HEVC" or "V_MPEG4/ISO/AVC"
 };
 
 } // namespace rec
