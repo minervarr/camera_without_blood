@@ -1092,13 +1092,14 @@ public class HdrCameraSession {
         try {
             int template = withEncoder ? CameraDevice.TEMPLATE_RECORD : CameraDevice.TEMPLATE_PREVIEW;
             CaptureRequest.Builder b = device.createCaptureRequest(template);
-            // While RAW recording, capture ONLY the RAW stream — drop the preview
-            // target. No preview frames means the renderer goes idle (no swapchain
-            // present / compositor hold), so the native ISP compute owns the whole
-            // GPU instead of being periodically stalled ~90ms by the present. The
-            // on-screen preview freezes during recording (intended).
+            // The preview target used to be dropped during RAW recording, which
+            // froze the on-screen image the moment REC was pressed. That was a
+            // workaround for the ISP submitting each frame as one uninterruptible
+            // dispatch, so any swapchain present stalled it ~90ms. The ISP now
+            // submits in row bands and app.cc throttles the present, so the
+            // preview stays live and the ISP still gets the GPU.
             boolean rawRecord = withEncoder && rawVideoMode && rawReader != null;
-            if (!rawRecord) b.addTarget(previewReader.getSurface());
+            b.addTarget(previewReader.getSurface());
             if (withEncoder) {
                 if (rawRecord) {
                     b.addTarget(rawReader.getSurface());

@@ -108,17 +108,31 @@ void App::run() {
         // keeps ticking via the finalizing timer and shows "Processing…%".
         maybe_finish_session();
 
-        // Don't present while recording: the swapchain present periodically stalls
-        // the ISP GPU compute ~90ms (the compositor holds our image), dropping
-        // frames. With the preview also dropped from the capture request, this loop
-        // mostly idles during recording — the GPU is the native ISP's.
-        // EXCEPTION: the few repaints we owe a freshly-recreated swapchain after
-        // returning to the foreground, so the Stop button is actually on screen
-        // (returning from background mid-recording would otherwise show black).
+        // Presenting during a RAW recording used to be skipped entirely: the
+        // present stalled the ISP compute ~90 ms because the whole frame was a
+        // single uninterruptible vkCmdDispatch, so the compositor could not get
+        // in edgewise. The ISP now submits each pass as row bands
+        // (RawVideoPipeline::kDispatchBands), which gives the GPU preemption
+        // points, so the preview can stay live while recording.
+        //
+        // It is still throttled: a full-rate preview competes with the ISP for
+        // nothing — kPreviewHzWhileSaving is plenty to frame a shot and bounds
+        // whatever the present still costs.
         bool ready  = renderer_ && renderer_->consume_frame_ready();
         bool saving = recorder_ && recorder_->state() == rec::State::SAVING;
         bool raw_saving = saving && recorder_->video_mode() == rec::VideoMode::RAW_PQ;
-        if (renderer_ && (ui_repaint_frames_ > 0 || (!raw_saving && (ready || finalizing)))) {
+
+        bool present = ready || finalizing;
+        if (present && raw_saving) {
+            constexpr int64_t kPreviewHzWhileSaving = 15;
+            const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (now_ns - last_present_ns_ < 1'000'000'000 / kPreviewHzWhileSaving)
+                present = false;
+            else
+                last_present_ns_ = now_ns;
+        }
+        if (renderer_ && (ui_repaint_frames_ > 0 || present)) {
             draw_frame();
             if (ui_repaint_frames_ > 0) --ui_repaint_frames_;
         }
@@ -163,7 +177,6 @@ bool App::onSurfaceRecreated() {
 void App::onAppBackgrounded() {
     resumed_ = false;
     orientation_.disable();
-    host_->stopTimer(TIMER_FINALIZE);
     if (recorder_ && recorder_->state() != rec::State::SAVING &&
         recorder_->state() != rec::State::FINALIZING) {
         stop_recording();
@@ -232,16 +245,6 @@ void App::onLButtonDown(int x, int y) {
 
 void App::onNavBack() {
     exit_requested_ = true;
-}
-
-void App::onTimer(int timerId) {
-    if (timerId == TIMER_FINALIZE) {
-        // Finalizing timer: keep the UI updating "Processing…%". If finalize
-        // completes, stop the timer.
-        if (!recorder_ || recorder_->state() != rec::State::FINALIZING) {
-            host_->stopTimer(TIMER_FINALIZE);
-        }
-    }
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
@@ -365,6 +368,6 @@ void App::destroy_recorder() {
 void App::draw_frame() {
     // Rebuild the overlay geometry from scratch each frame.
     canvas_data_.clear();
-    if (recorder_) ui_->update(*recorder_, orientation_.degrees());
+    if (recorder_) ui_->update(*recorder_);
     renderer_->draw(canvas_data_, 0);
 }

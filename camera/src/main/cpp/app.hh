@@ -33,10 +33,8 @@ public:
     void onAppForegrounded() override;
     void onLButtonDown(int x, int y) override;
     void onNavBack() override;
-    void onTimer(int timerId) override;
 
 private:
-    enum Timer { TIMER_FINALIZE = 1 };
 
     void init_vulkan();
     void destroy_vulkan();           // tears down renderer/canvas/ui ONLY (surface-tied)
@@ -66,6 +64,7 @@ private:
     // otherwise don't draw), to fill the freshly-recreated blank swapchain — else
     // returning from the background while recording shows a black screen with no
     // Stop button.
+    int64_t last_present_ns_ = 0;   // preview throttle while RAW-recording
     int  ui_repaint_frames_ = 0;
     // Persisted photo/video toggle, so it survives UI rebuilds on surface recreate.
     bool ui_video_mode_ = false;
