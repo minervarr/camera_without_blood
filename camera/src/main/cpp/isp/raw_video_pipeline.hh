@@ -14,7 +14,6 @@
 #include "../camera/dng_writer.hh"
 #include "vk_compute.hh"
 #include "frame_store.hh"
-#include "ai_denoiser.hh"
 
 namespace isp {
 
@@ -55,18 +54,12 @@ public:
 
     // Toggles the RAW-domain spatial denoise prepass — now Non-Local Means
     // (nlm_bayer.slang), on by default — that fills denoised_buf_ for the demosaic
-    // (A/B comparison; effective next frame). Bypassed while temporal is on.
+    // (A/B comparison; effective next frame).
     void set_denoise(bool on) { denoise_enabled_.store(on, std::memory_order_relaxed); }
 
     // Toggles the HQ (RCD-style directional) demosaic vs the default Malvar
     // (A/B comparison; effective next frame). HQ adds the green-plane prepass.
     void set_demosaic_hq(bool on) { demosaic_hq_.store(on, std::memory_order_relaxed); }
-
-    // Toggles the motion-adaptive spatial-temporal RAW denoise (A/B comparison;
-    // effective next frame). On by default. When on it OWNS denoised_buf_ (the
-    // standalone Bayer denoise pass is bypassed); when off the pipeline reverts
-    // to the legacy denoise/raw path.
-    void set_temporal(bool on) { temporal_enabled_.store(on, std::memory_order_relaxed); }
 
     // Toggles the chroma denoise (CD) post-ISP pass (A/B comparison; effective
     // next frame). Purely spatial and chroma-only: the luma plane is byte-for-byte
@@ -74,12 +67,12 @@ public:
     // luminance detail. Orthogonal to the upstream denoise/demosaic toggles.
     void set_chroma(bool on) { chroma_enabled_.store(on, std::memory_order_relaxed); }
 
-    bool start(const std::string& spill_dir);  // fresh encoder + worker threads + frame store
+    bool start();                              // fresh encoder + worker threads + frame store
     void stop();    // seal the store, drain the backlog, EOS flush, join threads, release encoder
 
-    // One RAW16 Bayer frame (camera thread). Copies into the never-drop frame
-    // store (RAM, spilling to disk on overflow) and returns immediately — the
-    // offline NLM pipeline drains the store during AND after capture.
+    // One RAW16 Bayer frame (camera thread). Copies into the bounded RAM frame
+    // store and returns immediately — the offline NLM pipeline drains the store
+    // during AND after capture.
     void on_frame(const uint8_t* data, int w, int h, int stride_bytes, int64_t ts_ns);
 
     // Finalize progress (frames accepted vs. processed). After stop() seals the
@@ -93,16 +86,14 @@ private:
     // Causal temporal window: the spatio-temporal NLM (nlm_bayer.slang) denoises
     // the current frame using this many recent PAST frames as extra patch sources.
     // MUST match kPast in nlm_bayer.slang (and the past-frame binding count).
+    // Retained only to size kSlots; the pipeline is spatial-only and reads no
+    // past frames (see nlm_bayer.slang).
     static constexpr int kTemporalPast = 2;
 
     // GPU staging buffers: the working set the pipeline copies frames into from the
     // FrameStore. Must hold the temporal window (current + kTemporalPast past) plus
     // a spare to pop the next frame into.
     static constexpr int kSlots = kTemporalPast + 3;
-
-    // RAM the FrameStore may hold before spilling to disk (tunable). Short clips
-    // stay entirely in RAM; longer ones spill the overflow.
-    static constexpr size_t kFrameStoreBudget = static_cast<size_t>(2048) << 20;  // 2 GB
 
     bool build_vulkan(AAssetManager* assets);
     bool probe_encoder();
@@ -113,7 +104,8 @@ private:
     // Record + submit one frame's GPU work (upload + optional denoise + ISP) into
     // the given in-flight slot; does NOT wait — returns right after the submit so
     // the CPU can encode an already-finished frame while this one runs.
-    bool record_and_submit(int inflight_idx, int staging_slot, const int* past_slots);
+    bool record_and_submit(int inflight_idx, int staging_slot);
+    void release_staging(int slot);
     // Block until an in-flight slot's GPU work completes (profiles GPU latency).
     bool retire(int inflight_idx);
     // P010 readback (from the given slot's output buffer) -> codec input.
@@ -132,18 +124,29 @@ private:
     bool ready_  = false;
 
     float ccm_[9]    = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // sensor -> BT.2020
-    float wb_[3]     = {1, 1, 1};
-    std::mutex wb_mtx_;
-    std::atomic<bool> wb_valid_{false};  // set once a real neutral has arrived
-    bool wb_warned_ = false;             // logged once if frames wait on WB
+    // WB gains: written per capture result (camera thread), read once per frame
+    // while recording the command buffer (pipeline thread). Lock-free on purpose
+    // — a mutex here sat in the per-frame hot path. The three components are
+    // independent atomics: a reader can at worst mix two adjacent neutrals,
+    // which is imperceptible (they differ by far less than a quantization step).
+    std::atomic<float> wb_[3]{1.0f, 1.0f, 1.0f};
+    std::atomic<bool>  wb_valid_{false};  // set once a real neutral has arrived
+    // pipeline_loop parks here until the first neutral arrives (or the recording
+    // stops) instead of polling — a stop with no WB ever delivered used to spin
+    // the thread forever and deadlock the join in stop().
+    std::mutex              wb_wait_mtx_;
+    std::condition_variable wb_cv_;
     std::atomic<bool> denoise_enabled_{true};
     // DISABLED: High-Quality (HQ) Demosaic and Chroma Denoise are turned off.
     // Reason: Running HQ demosaic and Chroma Denoise simultaneously requires massive GPU compute (~57ms per frame).
     // While it runs at 30fps initially when the phone is cool, the Android OS thermally throttles
     // the GPU after a few minutes of recording. When throttled, the frame processing time exceeds 33.3ms,
     // which drops the framerate to ~15fps. Disabling these guarantees a stable 30fps for long shoots.
-    std::atomic<bool> demosaic_hq_{false};     // false = nearest neighbour, true = high-quality bilinear
-    std::atomic<bool> temporal_enabled_{true}; // Re-enabled for high performance, but ghosting is disabled via kTemporalMax = 0.0
+    // false = Malvar-He-Cutler (single 5x5 pass), true = RCD-style directional
+    // (adds the green prepass). NOT "nearest neighbour vs bilinear" — both paths
+    // are gradient-corrected; HQ just spends a whole extra full-res pass on the
+    // green plane before reconstructing R/B in colour-difference space.
+    std::atomic<bool> demosaic_hq_{false};
     std::atomic<bool> chroma_enabled_{false};
     static constexpr float kPqScale = 0.10f;  // linear 1.0 -> 1000 nits
 
@@ -159,22 +162,11 @@ private:
     // kNlmH scales the shot-noise sigma into the weight falloff — higher = more
     // smoothing (and more risk of plastic texture). Conservative defaults; the
     // initial window is sized to leave real-time headroom, then tuned on-device.
-    static constexpr int   kNlmSearchRadius = 2;     // 5x5 candidate search (Restored for 30fps real-time)
+    // 8 candidates (a 3x3 window in same-colour steps). Must match MAX_S in
+    // nlm_bayer.slang, which bakes it to keep the patch in registers.
+    static constexpr int   kNlmSearchRadius = 1;
     static constexpr int   kNlmPatchRadius  = 1;     // 3x3 patch
     static constexpr float kNlmH            = 1.25f; // Very strong spatial denoising to provide a "super clean" image without temporal trailing
-
-    // Temporal denoise tuning, in units of the shot-noise sigma. Motion is the
-    // PEAK frame-to-frame difference over the same-color footprint (max, not
-    // mean — see temporal_denoise.slang): below kStaticSigma*sigma it is just
-    // noise (full temporal averaging); above kMotionSigma*sigma it is clearly
-    // moving (full passthrough, no ghosting); a smoothstep ramps between. The
-    // band errs toward passthrough — lower these (toward each other) for even
-    // less ghosting at the cost of less denoise on slow/low-contrast motion.
-    // kTemporalMax is the max IIR retention in fully-static regions
-    // (0.80 -> ~3x noise reduction); lower it to shorten any residual trail.
-    static constexpr float kStaticSigma = 3.0f;
-    static constexpr float kMotionSigma = 6.0f;
-    static constexpr float kTemporalMax = 0.0f; // 0.0 -> ABSOLUTELY ZERO temporal ghosting. Uses pure high-performance spatial.
 
     // Chroma denoise tuning. A luma-guided (joint-bilateral) average over the
     // chroma plane only: radius is the half window in chroma sites; sigmaS shapes
@@ -187,20 +179,12 @@ private:
 
     // Clock-domain rebase: sensor timestamps may be BOOTTIME while audio is
     // MONOTONIC; this fixed offset (computed on the first frame) aligns them.
-    int64_t ts_offset_   = 0;
-    bool    ts_anchored_ = false;
-
-    // Temporal denoise frame bookkeeping (reset each recording in start()).
-    // frame_idx drives the hist ping-pong parity and the first-frame gate;
-    // prev_ts derives the inter-frame delta for dropped-frame trust scaling.
-    int     temporal_frame_idx_ = 0;
-    int64_t temporal_prev_ts_   = 0;
+    // Written on the camera thread, read by the pipeline thread — hence atomic.
+    std::atomic<int64_t> ts_offset_{0};
+    std::atomic<bool>    ts_anchored_{false};
 
     FormatCb on_format_;
     PacketCb on_packet_;
-
-    // ── AI Denoise ───────────────────────────────────────────────────────────
-    AiDenoiser ai_denoiser_;
 
     // ── Vulkan ───────────────────────────────────────────────────────────────
     VkCompute             vk_;
@@ -209,7 +193,6 @@ private:
     VkDescriptorSetLayout denoise_dsl_      = VK_NULL_HANDLE;
     VkPipelineLayout      denoise_layout_   = VK_NULL_HANDLE;
     VkPipeline            denoise_pipeline_ = VK_NULL_HANDLE;
-    VkCompute::Buffer     denoised_buf_{};            // uint16-packed Bayer (shared)
     // Green-plane prepass (raw/denoised buffer -> shared green buffer) for the HQ
     // demosaic. Same 2-binding layout as denoise; input (binding 0) is repointed
     // per frame (raw set) or fixed (denoised set), output is the shared green buf.
@@ -217,13 +200,6 @@ private:
     VkPipelineLayout      green_layout_   = VK_NULL_HANDLE;
     VkPipeline            green_pipeline_ = VK_NULL_HANDLE;
     VkCompute::Buffer     green_buf_{};                // full-res float green (shared)
-    // Temporal denoise pass (raw + prev-history -> denoised_buf_ + next-history).
-    // Same RAW16 layout as denoised_buf_; output feeds green/ISP unchanged. The
-    // two hist buffers ping-pong (read prev / write next) by frame parity.
-    VkDescriptorSetLayout temporal_dsl_      = VK_NULL_HANDLE;
-    VkPipelineLayout      temporal_layout_   = VK_NULL_HANDLE;
-    VkPipeline            temporal_pipeline_ = VK_NULL_HANDLE;
-    VkCompute::Buffer     hist_[2]{};                  // ping-pong temporal estimate (shared)
     // Chroma denoise pass (out_buf Y + per-slot chroma scratch -> out_buf CbCr).
     // Reads the ISP-diverted noisy chroma + the luma plane (for edge guidance) and
     // writes the cleaned CbCr back into the same P010 out_buf. Per-slot scratch
@@ -246,22 +222,29 @@ private:
     // buffer, fence, P010 output buffer, and the three descriptor sets) so the
     // CPU readback+encode of one frame overlaps the GPU compute of the next. The
     // Bayer input is the camera-written staging buffer for that frame (bound per
-    // dispatch); denoised_buf_ is shared (denoise off by default; one cross-frame
-    // WAR barrier when on).
-    static constexpr int kInFlight = 3;
+    // dispatch); the NLM output is per-slot (see InFlight::denoised_buf).
+    //
+    // TWO is the exact depth pipeline_loop uses: it submits slot N and then
+    // immediately retires slot N-1, so a third slot could never hold pending work
+    // — it only cost memory (a P010 out_buf plus a chroma scratch, ~49 MB at
+    // 4080x3060) and a set of descriptors. Do not raise this without also
+    // deepening the submit/retire schedule.
+    static constexpr int kInFlight = 2;
     struct InFlight {
         VkCommandBuffer   cmd          = VK_NULL_HANDLE;
         VkFence           fence        = VK_NULL_HANDLE;
         VkCompute::Buffer out_buf{};                     // P010, tight layout
+        // Per-slot NLM output. It used to be one shared buffer, which forced a
+        // full-buffer WAR barrier every frame (this slot's denoise write against
+        // the other slot's ISP read) and serialized the two in-flight slots into
+        // no GPU-GPU overlap at all. Per-slot costs one extra Bayer buffer and
+        // removes the barrier outright.
+        VkCompute::Buffer denoised_buf{};                 // uint16-packed Bayer
         VkDescriptorSet   denoise_dset = VK_NULL_HANDLE;  // raw buf -> denoised_buf_
         VkDescriptorSet   green_dset_raw = VK_NULL_HANDLE; // green reads raw buf (dn off)
         VkDescriptorSet   green_dset_dn  = VK_NULL_HANDLE; // green reads denoised_buf_
         VkDescriptorSet   dset         = VK_NULL_HANDLE;  // ISP reads denoised_buf_ (+green)
         VkDescriptorSet   dset_raw     = VK_NULL_HANDLE;  // ISP reads raw buf (+green, dn off)
-        // Temporal pass, two parity sets: A reads hist_[0]/writes hist_[1],
-        // B reads hist_[1]/writes hist_[0]. Binding 0 (raw) is repointed per frame.
-        VkDescriptorSet   temporal_dset_a = VK_NULL_HANDLE;
-        VkDescriptorSet   temporal_dset_b = VK_NULL_HANDLE;
         // Chroma denoise: per-slot noisy-chroma scratch (ISP binding 3 target)
         // and the set that reads it + out_buf's luma and writes out_buf's chroma.
         VkCompute::Buffer chroma_buf{};                   // packed (Cb,Cr) per site
@@ -291,11 +274,25 @@ private:
     std::atomic<bool> stopping_{false};
     bool              sent_format_ = false;
 
-    // Frame accounting (logged at stop for fps visibility).
-    int64_t frames_in_ = 0, frames_dropped_ = 0, frames_encoded_ = 0;
+    // Frame accounting (logged at stop for fps visibility). frames_in_/
+    // frames_dropped_ are written on the camera thread and read on the pipeline
+    // thread (and vice-versa for drops on submit failure) — hence atomic.
+    std::atomic<int64_t> frames_in_{0}, frames_dropped_{0};
+    int64_t              frames_encoded_ = 0;   // drain thread only
 
     // Rolling per-stage profiling, flushed to logcat every kProfileWindow frames.
-    static constexpr int kProfileWindow = 60;
+    // 30, not 60: when the pipeline is slow — exactly when the profile line is
+    // needed — a 60-frame window can fail to complete for a whole clip and the
+    // diagnostic never prints.
+    static constexpr int kProfileWindow = 30;
+
+public:
+    // Each ISP pass is submitted as this many horizontal bands so the GPU can
+    // preempt between them and service the compositor. One full-frame dispatch
+    // is uninterruptible, which is why presenting during a RAW recording used to
+    // stall ~90 ms.
+    static constexpr uint32_t kDispatchBands = 8;
+private:
     int     prof_count_   = 0;
     int64_t prof_gpu_ns_  = 0;   // submit -> fence wait (GPU compute)
     int64_t prof_copy_ns_ = 0;   // P010 memcpy into the encoder input buffer
@@ -307,8 +304,9 @@ private:
     // localizing the stall (gpu vs encoder vs upstream camera delivery).
     int64_t prof_gpu_max_ns_     = 0;
     int64_t prof_encwait_max_ns_ = 0;
-    int64_t prof_gap_max_ns_     = 0;  // worst on_frame inter-arrival (camera side)
-    int64_t prof_gap_prev_ns_    = 0;  // previous on_frame timestamp
+    // Camera-thread writers, pipeline-thread reader/resetter — hence atomic.
+    std::atomic<int64_t> prof_gap_max_ns_{0};   // worst on_frame inter-arrival
+    std::atomic<int64_t> prof_gap_prev_ns_{0};  // previous on_frame timestamp
 };
 
 } // namespace isp

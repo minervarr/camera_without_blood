@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <thread>
 
 #include "../cpu_affinity.hh"
@@ -76,19 +77,6 @@ struct GreenPush {
     float    black[4];
 };
 static_assert(sizeof(GreenPush) == 32, "green push constant layout drift");
-
-// Must match the PushConstants block in temporal_denoise.slang (80 bytes). Each
-// 16-byte group maps to a Slang vec4 slot (std140-safe — no bare vec3).
-struct TemporalPush {
-    uint32_t raw_w, raw_h;   // rawDim
-    float    noise_k;
-    float    noise_floor;
-    float    black[4];       // black level per 2x2 CFA position
-    float    params[4];      // x=white, y=staticSigma, z=temporalMax, w=dtFactor
-    float    params2[4];     // x=motionSigma, yzw=pad
-    uint32_t flags[4];       // x=histValid, yzw=pad
-};
-static_assert(sizeof(TemporalPush) == 80, "temporal push constant layout drift");
 
 // Must match the PushConstants block in chroma_denoise.slang (32 bytes). uint2
 // outDim aligns to 8; the remaining members are bare scalars (no vec3/vec4), so
@@ -192,13 +180,17 @@ void RawVideoPipeline::derive_color_matrix() {
 }
 
 void RawVideoPipeline::set_neutral(const float neutral[3]) {
-    {
-        std::lock_guard<std::mutex> lk(wb_mtx_);
-        for (int i = 0; i < 3; ++i)
-            wb_[i] = (neutral[i] > 1e-6f) ? 1.0f / neutral[i] : 1.0f;
+    float g[3];
+    for (int i = 0; i < 3; ++i) {
+        g[i] = (neutral[i] > 1e-6f) ? 1.0f / neutral[i] : 1.0f;
+        wb_[i].store(g[i], std::memory_order_relaxed);
     }
-    if (!wb_valid_.exchange(true))
-        LOGI("WB gains %.3f %.3f %.3f (valid)", wb_[0], wb_[1], wb_[2]);
+    // release-ordered: pairs with the acquire load in pipeline_loop, so a reader
+    // that sees wb_valid_ also sees the gains above.
+    if (!wb_valid_.exchange(true, std::memory_order_release)) {
+        LOGI("WB gains %.3f %.3f %.3f (valid)", g[0], g[1], g[2]);
+        wb_cv_.notify_all();
+    }
 }
 
 // On this pipeline the audio is anchored to CLOCK_MONOTONIC, but the camera
@@ -246,22 +238,17 @@ bool RawVideoPipeline::init(AAssetManager* assets, const dng::DngMeta& meta,
     }
     derive_color_matrix();
 
-    // ── AI Engine Setup ──────────────────────────────────────────────────────
-    // DISABLED: AiDenoiser is dormant scaffolding — its run() below is commented
-    // out, so init() does nothing useful. Worse, it brings up ncnn's OpenMP
-    // runtime (libomp), which is process-global and NOT re-init-safe: the second
-    // time android_main runs in the same process (the camera scene relaunched by
-    // an embedding host), __kmp_parallel_initialize hits a debug assert and
-    // aborts the whole process. Keep it off until AiDenoiser is actually wired in
-    // (and OpenMP re-entry is solved). See ai_denoiser_.run() below.
-    // ai_denoiser_.init(assets);
-
     if (!probe_encoder()) {
         LOGE("no P010 HEVC Main10 encoder — RAW video unavailable");
         return false;
     }
     if (!build_vulkan(assets)) {
         LOGE("Vulkan ISP setup failed — RAW video unavailable");
+        // build_vulkan bails at the first failure, leaving whatever it already
+        // created (pipelines, layouts, buffers, the descriptor pool) alive.
+        // shutdown() is written to skip null handles, so it is the safe way to
+        // release that partial state instead of leaking it.
+        shutdown();
         return false;
     }
     ready_ = true;
@@ -273,6 +260,32 @@ bool RawVideoPipeline::init(AAssetManager* assets, const dng::DngMeta& meta,
 // Builds one compute pipeline (descriptor-set layout + pipeline layout +
 // pipeline) from a SPIR-V asset. `bindings`/`binding_count` describe the set;
 // `push_size` is the push-constant block size.
+// Android's libvulkan.so exports only Vulkan 1.0 symbols, so this 1.1 entry
+// point has to come from vkGetDeviceProcAddr. Null means "not available" and the
+// helper falls back to a single unbanded dispatch.
+static PFN_vkCmdDispatchBase g_cmd_dispatch_base = nullptr;
+
+static void load_dispatch_base(VkDevice dev) {
+    g_cmd_dispatch_base = reinterpret_cast<PFN_vkCmdDispatchBase>(
+        vkGetDeviceProcAddr(dev, "vkCmdDispatchBase"));
+    if (!g_cmd_dispatch_base)
+        g_cmd_dispatch_base = reinterpret_cast<PFN_vkCmdDispatchBase>(
+            vkGetDeviceProcAddr(dev, "vkCmdDispatchBaseKHR"));
+    if (!g_cmd_dispatch_base)
+        LOGI("vkCmdDispatchBase unavailable - ISP passes stay unbanded");
+}
+
+static void dispatch_banded(VkCommandBuffer cmd, uint32_t gx, uint32_t gy, uint32_t gz) {
+    const uint32_t bands = g_cmd_dispatch_base
+                         ? std::min<uint32_t>(RawVideoPipeline::kDispatchBands, gy) : 1u;
+    if (bands <= 1) { vkCmdDispatch(cmd, gx, gy, gz); return; }
+    const uint32_t step = (gy + bands - 1) / bands;
+    for (uint32_t base = 0; base < gy; base += step) {
+        const uint32_t n = std::min(step, gy - base);
+        g_cmd_dispatch_base(cmd, 0, base, 0, gx, n, gz);
+    }
+}
+
 static bool build_compute(VkCompute& vk, AAssetManager* assets, const char* spv,
                           const VkDescriptorSetLayoutBinding* bindings, uint32_t binding_count,
                           uint32_t push_size, VkDescriptorSetLayout& dsl,
@@ -302,6 +315,11 @@ static bool build_compute(VkCompute& vk, AAssetManager* assets, const char* spv,
     cpci.stage.module = shader;
     cpci.stage.pName  = "main";
     cpci.layout       = layout;
+    // DISPATCH_BASE lets the ISP issue each pass as a series of row bands via
+    // vkCmdDispatchBase (see dispatch_banded). Adreno only preempts at dispatch
+    // boundaries, so a single full-frame dispatch is an uninterruptible block —
+    // which is what made a swapchain present stall behind it (see app.cc).
+    cpci.flags        = VK_PIPELINE_CREATE_DISPATCH_BASE_BIT;
     VkResult pr = vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline);
     vkDestroyShaderModule(dev, shader, nullptr);
     if (pr != VK_SUCCESS) { LOGE("compute pipeline creation failed for %s", spv); return false; }
@@ -311,16 +329,25 @@ static bool build_compute(VkCompute& vk, AAssetManager* assets, const char* spv,
 bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
     if (!vk_.init()) return false;
     VkDevice dev = vk_.device();
+    load_dispatch_base(dev);
 
     // All bindings are storage buffers now (raw + denoised + P010 are all
     // uint16/uint32-packed buffers — no images, no upload).
     // ── Denoise pass (spatio-temporal NLM): binding 0 = current frame, 1 =
-    // denoised out, 2/3 = the kTemporalPast past frames (causal temporal window).
+    // denoised out. The pass is spatial-only: it used to also bind the two most
+    // recent past frames, which nlm_bayer.slang never read (every temporal
+    // variant tried here smeared handheld motion), so they cost a descriptor
+    // write per frame for nothing.
     // nlm_bayer.slang searches patches across all of them; downstream is unchanged.
-    VkDescriptorSetLayoutBinding dn_bind[2 + kTemporalPast]{};
-    for (uint32_t i = 0; i < 2 + kTemporalPast; ++i)
+    VkDescriptorSetLayoutBinding dn_bind[2]{};
+    for (uint32_t i = 0; i < 2; ++i)
         dn_bind[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    if (!build_compute(vk_, assets, "shaders/nlm_bayer.spv", dn_bind, 2 + kTemporalPast,
+    // fp16 halves this pass's groupshared traffic and doubles its ALU rate, and
+    // it is bound by both. Devices without shaderFloat16 get the fp32 build.
+    const char* nlm_spv = vk_.fp16_supported() ? "shaders/nlm_bayer_fp16.spv"
+                                               : "shaders/nlm_bayer.spv";
+    LOGI("NLM kernel: %s", vk_.fp16_supported() ? "fp16" : "fp32");
+    if (!build_compute(vk_, assets, nlm_spv, dn_bind, 2,
                        sizeof(DenoisePush), denoise_dsl_, denoise_layout_, denoise_pipeline_))
         return false;
 
@@ -350,25 +377,15 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
                        sizeof(ChromaPush), chroma_dsl_, chroma_layout_, chroma_pipeline_))
         return false;
 
-    // ── Temporal pass: 0 = raw, 1 = hist read, 2 = denoised out, 3 = hist write. ──
-    VkDescriptorSetLayoutBinding td_bind[4]{};
-    td_bind[0] = { 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    td_bind[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    td_bind[2] = { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    td_bind[3] = { 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    if (!build_compute(vk_, assets, "shaders/temporal_denoise.spv", td_bind, 4,
-                       sizeof(TemporalPush), temporal_dsl_, temporal_layout_, temporal_pipeline_))
-        return false;
-
-    // 8 sets per in-flight slot: denoise(2 + kTemporalPast bufs), green-from-raw(2),
-    // green-from-denoised(2), ISP-from-denoised(4), ISP-from-raw(4), temporal-A(4),
-    // temporal-B(4), chroma-denoise(2).
+    // 6 sets per in-flight slot: denoise(2 bufs), green-from-raw(2),
+    // green-from-denoised(2), ISP-from-denoised(4), ISP-from-raw(4),
+    // chroma-denoise(2).
     VkDescriptorPoolSize sizes[1] = {
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (24 + kTemporalPast) * kInFlight },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16 * kInFlight },
     };
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpci.maxSets       = 8 * kInFlight;
+    dpci.maxSets       = 6 * kInFlight;
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes    = sizes;
     if (vkCreateDescriptorPool(dev, &dpci, nullptr, &dpool_) != VK_SUCCESS) return false;
@@ -376,29 +393,12 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
     // RAW16 buffers are uint16-packed (2 px per uint32): raw_w*raw_h*2 bytes.
     VkDeviceSize raw_bytes = static_cast<VkDeviceSize>(raw_w_) * raw_h_ * 2;
 
-    // Shared denoised intermediate (device-local; denoise off by default).
-    if (!vk_.create_buffer(raw_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, denoised_buf_)) {
-        LOGE("denoised buffer creation failed");
-        return false;
-    }
-
     // Shared green plane (device-local; one float per pixel; HQ demosaic only).
     VkDeviceSize green_bytes = static_cast<VkDeviceSize>(raw_w_) * raw_h_ * 4;
     if (!vk_.create_buffer(green_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, green_buf_)) {
         LOGE("green buffer creation failed");
         return false;
-    }
-
-    // Temporal denoise history (device-local; same RAW16 layout). Two buffers
-    // ping-pong: each frame reads the previous estimate and writes the next.
-    for (int i = 0; i < 2; ++i) {
-        if (!vk_.create_buffer(raw_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, hist_[i])) {
-            LOGE("temporal history buffer %d creation failed", i);
-            return false;
-        }
     }
 
     // RAW16 input ring: the camera writes these and the ISP reads them directly
@@ -424,13 +424,20 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
     bool out_cached = true;
     // Fixed buffer infos referenced by every slot's writes (binding 0 of the raw
     // sets is a placeholder repointed per frame in record_and_submit).
-    VkDescriptorBufferInfo dn_info   { denoised_buf_.buf, 0, VK_WHOLE_SIZE };
     VkDescriptorBufferInfo green_info{ green_buf_.buf,    0, VK_WHOLE_SIZE };
     VkDescriptorBufferInfo raw0_info { staging_[0].buf,   0, VK_WHOLE_SIZE };
-    VkDescriptorBufferInfo hist0_info{ hist_[0].buf,      0, VK_WHOLE_SIZE };
-    VkDescriptorBufferInfo hist1_info{ hist_[1].buf,      0, VK_WHOLE_SIZE };
     for (int k = 0; k < kInFlight; ++k) {
         InFlight& f = inflight_[k];
+
+        // Per-slot NLM output (device-local). Per-slot rather than shared so the
+        // denoise write of this frame needs no WAR barrier against the other
+        // slot's ISP read — that barrier serialized the whole in-flight ring.
+        if (!vk_.create_buffer(raw_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, f.denoised_buf)) {
+            LOGE("denoised buffer creation failed (slot %d)", k);
+            return false;
+        }
+        VkDescriptorBufferInfo dn_info{ f.denoised_buf.buf, 0, VK_WHOLE_SIZE };
 
         // Per-slot P010 output. Prefer cached host memory for the CPU readback.
         if (!vk_.create_buffer(p010_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -469,10 +476,6 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
         if (vkAllocateDescriptorSets(dev, &dsai, &f.dset) != VK_SUCCESS) return false;
         dsai.pSetLayouts        = &dsl_;
         if (vkAllocateDescriptorSets(dev, &dsai, &f.dset_raw) != VK_SUCCESS) return false;
-        dsai.pSetLayouts        = &temporal_dsl_;
-        if (vkAllocateDescriptorSets(dev, &dsai, &f.temporal_dset_a) != VK_SUCCESS) return false;
-        dsai.pSetLayouts        = &temporal_dsl_;
-        if (vkAllocateDescriptorSets(dev, &dsai, &f.temporal_dset_b) != VK_SUCCESS) return false;
         dsai.pSetLayouts        = &chroma_dsl_;
         if (vkAllocateDescriptorSets(dev, &dsai, &f.cd_dset) != VK_SUCCESS) return false;
 
@@ -493,11 +496,9 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
         // dset_raw) is a placeholder repointed at the live staging slot each
         // frame. The denoised-reading sets (green_dset_dn, dset) bind it fixed.
         // The green plane is shared and bound fixed on both ISP sets.
-        VkWriteDescriptorSet writes[16] = {
+        const VkWriteDescriptorSet writes[] = {
             wbuf(f.denoise_dset,   0, &raw0_info),    // current frame (placeholder)
             wbuf(f.denoise_dset,   1, &dn_info),      // denoised out
-            wbuf(f.denoise_dset,   2, &raw0_info),    // past frame 0 (placeholder)
-            wbuf(f.denoise_dset,   3, &raw0_info),    // past frame 1 (placeholder)
             wbuf(f.green_dset_raw, 0, &raw0_info),    // raw (placeholder)
             wbuf(f.green_dset_raw, 1, &green_info),   // green out
             wbuf(f.green_dset_dn,  0, &dn_info),      // denoised in
@@ -511,30 +512,17 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
             wbuf(f.dset_raw,       2, &green_info),   // green in
             wbuf(f.dset_raw,       3, &chroma_info),  // chroma scratch (CD)
         };
-        vkUpdateDescriptorSets(dev, 16, writes, 0, nullptr);
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(std::size(writes)),
+                               writes, 0, nullptr);
 
         // Chroma denoise set: reads out_buf (luma guidance) + this slot's chroma
         // scratch; writes the cleaned CbCr back into out_buf.
-        VkWriteDescriptorSet cd_writes[2] = {
+        const VkWriteDescriptorSet cd_writes[] = {
             wbuf(f.cd_dset, 0, &out_info),     // P010 out (RW: read Y, write CbCr)
             wbuf(f.cd_dset, 1, &chroma_info),  // noisy chroma scratch (read)
         };
-        vkUpdateDescriptorSets(dev, 2, cd_writes, 0, nullptr);
-
-        // Temporal parity sets. Binding 0 (raw) is a placeholder repointed at the
-        // live staging slot each frame; binding 2 is the shared denoised output.
-        // The hist pair swaps read/write roles between the two sets.
-        VkWriteDescriptorSet td_writes[8] = {
-            wbuf(f.temporal_dset_a, 0, &raw0_info),  // raw (placeholder)
-            wbuf(f.temporal_dset_a, 1, &hist0_info), // hist read  (prev)
-            wbuf(f.temporal_dset_a, 2, &dn_info),    // denoised out
-            wbuf(f.temporal_dset_a, 3, &hist1_info), // hist write (next)
-            wbuf(f.temporal_dset_b, 0, &raw0_info),  // raw (placeholder)
-            wbuf(f.temporal_dset_b, 1, &hist1_info), // hist read  (prev)
-            wbuf(f.temporal_dset_b, 2, &dn_info),    // denoised out
-            wbuf(f.temporal_dset_b, 3, &hist0_info), // hist write (next)
-        };
-        vkUpdateDescriptorSets(dev, 8, td_writes, 0, nullptr);
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(std::size(cd_writes)),
+                               cd_writes, 0, nullptr);
 
         f.cmd   = vk_.alloc_cmd();
         f.fence = vk_.create_fence(false);
@@ -596,7 +584,7 @@ bool RawVideoPipeline::probe_encoder() {
 
 // ── Recording control ────────────────────────────────────────────────────────
 
-bool RawVideoPipeline::start(const std::string& spill_dir) {
+bool RawVideoPipeline::start() {
     if (!ready_ || running_) return false;
 
     codec_ = make_encoder();
@@ -630,22 +618,17 @@ bool RawVideoPipeline::start(const std::string& spill_dir) {
 
     for (bool& b : staging_busy_) b = false;
     sent_format_   = false;
-    frames_in_ = frames_dropped_ = frames_encoded_ = 0;
-    ts_anchored_ = false;   // re-pin the clock domain for this recording
-    wb_warned_   = false;
-    temporal_frame_idx_ = 0;  // fresh temporal history each recording (first frame passes through)
-    temporal_prev_ts_   = 0;
+    frames_in_.store(0); frames_dropped_.store(0); frames_encoded_ = 0;
+    ts_anchored_.store(false);   // re-pin the clock domain for this recording
     prof_count_ = 0; prof_gpu_ns_ = prof_copy_ns_ = prof_encwait_ns_ = prof_wall_ns_ = prof_last_ns_ = 0;
-    prof_gpu_max_ns_ = prof_encwait_max_ns_ = prof_gap_max_ns_ = prof_gap_prev_ns_ = 0;
+    prof_gpu_max_ns_ = prof_encwait_max_ns_ = 0;
+    prof_gap_max_ns_.store(0); prof_gap_prev_ns_.store(0);
     prof_drops_base_ = 0;
     stopping_ = false;
     running_  = true;
-    // Never-drop RAM+disk buffer between the camera and the offline NLM pipeline.
-    // Created only now that the encoder is up, so an encoder failure above can't
-    // leave the store's I/O thread running.
-    store_.init(raw_w_, raw_h_, kFrameStoreBudget, spill_dir);
-    LOGI("recording start: temporal=%s  nlm=%s  demosaic=%s  chroma=%s",
-         temporal_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
+    // Bounded RAM backlog between the camera and the offline NLM pipeline.
+    store_.init(raw_w_, raw_h_);
+    LOGI("recording start [nlm-tiled-lds]: nlm=%s  demosaic=%s  chroma=%s",
          denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
          demosaic_hq_.load(std::memory_order_relaxed) ? "HQ" : "Malvar",
          chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
@@ -657,15 +640,16 @@ bool RawVideoPipeline::start(const std::string& spill_dir) {
 void RawVideoPipeline::stop() {
     if (!running_) return;
     // Seal the store: no more input. pipeline_loop keeps popping until the whole
-    // backlog (RAM + any disk spill) is processed, then queues the encoder EOS —
+    // backlog is processed, then queues the encoder EOS —
     // this is the finalize drain, so the join below can take a while (by design,
     // the caller runs stop() off a background finalize thread).
-    stopping_ = true;
+    stopping_.store(true, std::memory_order_release);
+    wb_cv_.notify_all();   // release pipeline_loop if it is still parked on WB
     store_.seal();
     if (pipeline_thread_.joinable()) pipeline_thread_.join();  // drains backlog, queues EOS on exit
     if (drain_thread_.joinable())    drain_thread_.join();     // exits on EOS
     running_ = false;
-    store_.shutdown();   // join the store I/O thread, delete any spill chunks
+    store_.shutdown();
 
     if (codec_) {
         AMediaCodec_stop(codec_);
@@ -673,8 +657,8 @@ void RawVideoPipeline::stop() {
         codec_ = nullptr;
     }
     LOGI("stopped: %lld frames in, %lld encoded, %lld dropped",
-         static_cast<long long>(frames_in_), static_cast<long long>(frames_encoded_),
-         static_cast<long long>(frames_dropped_));
+         static_cast<long long>(frames_in_.load()), static_cast<long long>(frames_encoded_),
+         static_cast<long long>(frames_dropped_.load()));
 }
 
 void RawVideoPipeline::shutdown() {
@@ -684,20 +668,16 @@ void RawVideoPipeline::shutdown() {
     vkDeviceWaitIdle(dev);
     for (auto& f : inflight_) {
         if (f.fence) { vkDestroyFence(dev, f.fence, nullptr); f.fence = VK_NULL_HANDLE; }
+        vk_.destroy_buffer(f.denoised_buf);
         vk_.destroy_buffer(f.out_buf);
         vk_.destroy_buffer(f.chroma_buf);
     }
     for (auto& s : staging_) vk_.destroy_buffer(s);
-    vk_.destroy_buffer(denoised_buf_);
     vk_.destroy_buffer(green_buf_);
-    for (auto& hb : hist_) vk_.destroy_buffer(hb);
     if (dpool_)    { vkDestroyDescriptorPool(dev, dpool_, nullptr); dpool_ = VK_NULL_HANDLE; }
     if (chroma_pipeline_) { vkDestroyPipeline(dev, chroma_pipeline_, nullptr); chroma_pipeline_ = VK_NULL_HANDLE; }
     if (chroma_layout_)   { vkDestroyPipelineLayout(dev, chroma_layout_, nullptr); chroma_layout_ = VK_NULL_HANDLE; }
     if (chroma_dsl_)      { vkDestroyDescriptorSetLayout(dev, chroma_dsl_, nullptr); chroma_dsl_ = VK_NULL_HANDLE; }
-    if (temporal_pipeline_) { vkDestroyPipeline(dev, temporal_pipeline_, nullptr); temporal_pipeline_ = VK_NULL_HANDLE; }
-    if (temporal_layout_)   { vkDestroyPipelineLayout(dev, temporal_layout_, nullptr); temporal_layout_ = VK_NULL_HANDLE; }
-    if (temporal_dsl_)      { vkDestroyDescriptorSetLayout(dev, temporal_dsl_, nullptr); temporal_dsl_ = VK_NULL_HANDLE; }
     if (pipeline_) { vkDestroyPipeline(dev, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
     if (layout_)   { vkDestroyPipelineLayout(dev, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
     if (dsl_)      { vkDestroyDescriptorSetLayout(dev, dsl_, nullptr); dsl_ = VK_NULL_HANDLE; }
@@ -727,59 +707,61 @@ void RawVideoPipeline::on_frame(const uint8_t* data, int w, int h,
     }
 
     // First frame: pin the sensor clock to the audio (MONOTONIC) domain.
-    if (!ts_anchored_) {
-        ts_offset_   = compute_ts_offset(ts_ns);
-        ts_anchored_ = true;
+    if (!ts_anchored_.load(std::memory_order_relaxed)) {
+        ts_offset_.store(compute_ts_offset(ts_ns), std::memory_order_relaxed);
+        ts_anchored_.store(true, std::memory_order_relaxed);
     }
-    ts_ns -= ts_offset_;
+    ts_ns -= ts_offset_.load(std::memory_order_relaxed);
 
     // Worst gap between successive RAW frames arriving from the camera — a ~1Hz
     // spike here means the stall is upstream (camera/handler), not our pipeline.
     const int64_t arr = clock_ns(CLOCK_MONOTONIC);
-    if (prof_gap_prev_ns_) {
-        int64_t g = arr - prof_gap_prev_ns_;
-        if (g > prof_gap_max_ns_) prof_gap_max_ns_ = g;
+    const int64_t gap_prev = prof_gap_prev_ns_.load(std::memory_order_relaxed);
+    if (gap_prev) {
+        const int64_t g = arr - gap_prev;
+        if (g > prof_gap_max_ns_.load(std::memory_order_relaxed))
+            prof_gap_max_ns_.store(g, std::memory_order_relaxed);
     }
-    prof_gap_prev_ns_ = arr;
+    prof_gap_prev_ns_.store(arr, std::memory_order_relaxed);
 
-    ++frames_in_;
+    frames_in_.fetch_add(1, std::memory_order_relaxed);
 
-    // Hand the frame to the never-drop store (RAM, spilling to disk on overflow).
+    // Hand the frame to the bounded RAM store (drops the newest past the cap).
     // The store de-strides into a pooled buffer and wakes the pipeline thread.
-    if (!store_.push(data, stride_bytes, ts_ns)) ++frames_dropped_;
+    if (!store_.push(data, stride_bytes, ts_ns))
+        frames_dropped_.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ── GPU dispatch + encode (pipeline thread) ──────────────────────────────────
 
-bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
-                                         const int* past_slots) {
+// Issue one logical dispatch as kDispatchBands horizontal bands, so the GPU can
+// preempt between them. Same total work and same thread coordinates: with
+// VK_PIPELINE_CREATE_DISPATCH_BASE_BIT, gl_WorkGroupID (and therefore
+// SV_DispatchThreadID) starts at the base, so no shader is aware of the split.
+// The cost is the extra launches: ~20us each, under 1% of a frame.
+void RawVideoPipeline::release_staging(int slot) {
+    if (slot >= 0 && slot < kSlots) staging_busy_[slot] = false;
+}
+
+bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
     InFlight& f = inflight_[inflight_idx];
 
     const bool dn_on = denoise_enabled_.load(std::memory_order_relaxed);
     const bool hq_on = demosaic_hq_.load(std::memory_order_relaxed);
-    const bool td_on = temporal_enabled_.load(std::memory_order_relaxed);
     const bool cd_on = chroma_enabled_.load(std::memory_order_relaxed);
-    // Both the temporal pass and the legacy denoise pass produce denoised_buf_;
-    // when either runs, green + ISP read denoised_buf_ instead of raw. Temporal
-    // takes precedence (it owns denoised_buf_ and the standalone denoise is skipped).
-    const bool src_denoised = td_on || dn_on;
-    // Active hist ping-pong set for this frame (parity by frame index).
-    VkDescriptorSet td_set = (temporal_frame_idx_ & 1) ? f.temporal_dset_b
-                                                       : f.temporal_dset_a;
+    // The NLM denoise pass produces denoised_buf_; when it runs, green + ISP read
+    // denoised_buf_ instead of raw.
+    const bool src_denoised = dn_on;
 
     // The Bayer input is this frame's camera-written staging buffer. Repoint
     // binding 0 of every set we'll dispatch that reads the raw buffer directly —
-    // the retired slot's sets are free to update. The temporal/denoise pass reads
-    // raw; with neither, the green prepass (if HQ) and the ISP read raw. Sets that
-    // read denoised_buf_ (green_dset_dn, dset) are fixed at build.
+    // the retired slot's sets are free to update. The denoise pass reads raw;
+    // without it, the green prepass (if HQ) and the ISP read raw. Sets that read
+    // denoised_buf_ (green_dset_dn, dset) are fixed at build.
     {
         // Buffer infos must outlive the vkUpdateDescriptorSets call below.
         VkDescriptorBufferInfo raw_info{ staging_[staging_slot].buf, 0, VK_WHOLE_SIZE };
-        VkDescriptorBufferInfo past_info[kTemporalPast];
-        for (int k = 0; k < kTemporalPast; ++k)
-            past_info[k] = VkDescriptorBufferInfo{ staging_[past_slots[k]].buf, 0, VK_WHOLE_SIZE };
-
-        VkWriteDescriptorSet ws[1 + kTemporalPast]{};
+        VkWriteDescriptorSet ws[2]{};
         int nw = 0;
         auto add = [&](VkDescriptorSet set, uint32_t binding, const VkDescriptorBufferInfo* bi) {
             ws[nw].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -790,14 +772,10 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
             ws[nw].pBufferInfo     = bi;
             ++nw;
         };
-        if (td_on) {
-            add(td_set, 0, &raw_info);
-        } else if (dn_on) {
-            // Spatio-temporal NLM: current frame (binding 0) + the past window
-            // (bindings 2..). Binding 1 (denoised out) is fixed at build.
+        if (dn_on) {
+            // Only the current frame is repointed; binding 1 (this slot's
+            // denoised output) is fixed at build.
             add(f.denoise_dset, 0, &raw_info);
-            for (int k = 0; k < kTemporalPast; ++k)
-                add(f.denoise_dset, static_cast<uint32_t>(2 + k), &past_info[k]);
         } else {
             if (hq_on) add(f.green_dset_raw, 0, &raw_info);
             add(f.dset_raw, 0, &raw_info);
@@ -827,97 +805,10 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
                              1, &in_b, 0, nullptr);
     }
 
-    // ── AI Denoise (ncnn) on RAW Bayer data ──────────────────────────────────
-    // In-place processing via the AI Denoiser wrapper.
-    // ai_denoiser_.run(reinterpret_cast<uint16_t*>(staging_[staging_slot].mapped), raw_w_, raw_h_);
-
-    // ── Temporal denoise: raw + prev hist -> denoised_buf_ + next hist. ──
-    if (td_on) {
-        // denoised_buf_ (prev frame's ISP read) and the two hist buffers (prev
-        // frame's temporal read/write) are all shared across the in-flight ring,
-        // so this frame's writes/reads must follow the previous frame's on the
-        // same queue. One COMPUTE->COMPUTE barrier over all three covers the
-        // hazards (WAR on denoised_buf_ + hist_write, RAW on hist_read).
-        VkBufferMemoryBarrier td_war[3]{};
-        const VkBuffer td_bufs[3] = { denoised_buf_.buf, hist_[0].buf, hist_[1].buf };
-        for (int i = 0; i < 3; ++i) {
-            td_war[i].sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            td_war[i].srcAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            td_war[i].dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            td_war[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            td_war[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            td_war[i].buffer              = td_bufs[i];
-            td_war[i].size                = VK_WHOLE_SIZE;
-        }
-        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                             3, td_war, 0, nullptr);
-
-        // Dropped-frame trust: if more time than nominal elapsed since the last
-        // frame, the scene may have moved more, so lower the temporal retention.
-        float dt_factor = 1.0f;
-        const int64_t ts = inflight_[inflight_idx].ts_ns;   // set by pipeline_loop before this call
-        if (temporal_frame_idx_ > 0 && temporal_prev_ts_ > 0 && ts > temporal_prev_ts_) {
-            const double nominal = 1e9 / (fps_ > 0 ? fps_ : 30);
-            const double dt = static_cast<double>(ts - temporal_prev_ts_);
-            dt_factor = static_cast<float>(std::min(1.0, std::max(0.5, nominal / dt)));
-        }
-        temporal_prev_ts_ = ts;
-
-        TemporalPush tp{};
-        tp.raw_w       = static_cast<uint32_t>(raw_w_);
-        tp.raw_h       = static_cast<uint32_t>(raw_h_);
-        tp.noise_k     = kNoiseK;
-        tp.noise_floor = kNoiseFloor;
-        for (int i = 0; i < 4; ++i) tp.black[i] = meta_.black_level[i];
-        tp.params[0]  = static_cast<float>(meta_.white_level);  // white
-        tp.params[1]  = kStaticSigma;
-        tp.params[2]  = kTemporalMax;
-        tp.params[3]  = dt_factor;
-        tp.params2[0] = kMotionSigma;
-        tp.flags[0]   = (temporal_frame_idx_ > 0) ? 1u : 0u;    // histValid
-
-        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, temporal_pipeline_);
-        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, temporal_layout_,
-                                0, 1, &td_set, 0, nullptr);
-        vkCmdPushConstants(f.cmd, temporal_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(tp), &tp);
-        // One thread per horizontal pixel PAIR -> grid x is raw_w/2.
-        vkCmdDispatch(f.cmd, (static_cast<uint32_t>(raw_w_) / 2 + 7) / 8,
-                      (static_cast<uint32_t>(raw_h_) + 7) / 8, 1);
-        ++temporal_frame_idx_;
-
-        // denoised_buf_ written by the temporal pass -> read by green/ISP.
-        VkBufferMemoryBarrier td_rd{};
-        td_rd.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        td_rd.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-        td_rd.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        td_rd.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        td_rd.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        td_rd.buffer              = denoised_buf_.buf;
-        td_rd.size                = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                             1, &td_rd, 0, nullptr);
-    }  // if (td_on)
-
     // ── Denoise prepass: raw buf -> denoised_buf_ (Non-Local Means, RAW domain).
-    // Skipped while temporal is on (temporal already owns denoised_buf_).
-    if (dn_on && !td_on) {
-        // denoised_buf_ is shared across the in-flight ring, so this write must
-        // wait for the previous frame's ISP read of it (WAR) — a COMPUTE->COMPUTE
-        // execution dependency covers the hazard.
-        VkBufferMemoryBarrier dn_war{};
-        dn_war.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        dn_war.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        dn_war.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-        dn_war.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        dn_war.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        dn_war.buffer              = denoised_buf_.buf;
-        dn_war.size                = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                             1, &dn_war, 0, nullptr);
-
+    if (dn_on) {
+        // No WAR barrier here: denoised_buf is per-slot, so this frame's write
+        // cannot race the other in-flight slot's ISP read.
         DenoisePush dn{};
         dn.raw_w         = static_cast<uint32_t>(raw_w_);
         dn.raw_h         = static_cast<uint32_t>(raw_h_);
@@ -934,7 +825,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
                                 0, 1, &f.denoise_dset, 0, nullptr);
         vkCmdPushConstants(f.cmd, denoise_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dn), &dn);
         // One thread per horizontal pixel PAIR -> grid x is raw_w/2.
-        vkCmdDispatch(f.cmd, (static_cast<uint32_t>(raw_w_) / 2 + 7) / 8,
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(raw_w_) / 2 + 7) / 8,
                       (static_cast<uint32_t>(raw_h_) + 7) / 8, 1);
 
         // denoised_buf_ written by denoise -> read by the ISP dispatch.
@@ -944,7 +835,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
         dn_rd.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
         dn_rd.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         dn_rd.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        dn_rd.buffer              = denoised_buf_.buf;
+        dn_rd.buffer              = f.denoised_buf.buf;
         dn_rd.size                = VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
@@ -975,7 +866,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
         gp.white = static_cast<float>(meta_.white_level);
         for (int i = 0; i < 4; ++i) gp.black[i] = meta_.black_level[i];
 
-        // Green reads the same source the ISP will read (denoised when temporal
+        // Green reads the same source the ISP will read (denoised when the NLM
         // or the legacy denoise produced it, else the raw staging buffer).
         VkDescriptorSet gn_set = src_denoised ? f.green_dset_dn : f.green_dset_raw;
         vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, green_pipeline_);
@@ -983,7 +874,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
                                 0, 1, &gn_set, 0, nullptr);
         vkCmdPushConstants(f.cmd, green_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(gp), &gp);
         // One thread per pixel (full-res float plane).
-        vkCmdDispatch(f.cmd, (static_cast<uint32_t>(raw_w_) + 7) / 8,
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(raw_w_) + 7) / 8,
                       (static_cast<uint32_t>(raw_h_) + 7) / 8, 1);
 
         // green_buf_ written by the green pass -> read by the ISP dispatch.
@@ -1014,10 +905,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
                                                          | (cd_on ? (1u << 9) : 0u);
     pc.white          = static_cast<float>(meta_.white_level);
     for (int i = 0; i < 4; ++i) pc.black[i] = meta_.black_level[i];
-    {
-        std::lock_guard<std::mutex> lk(wb_mtx_);
-        for (int i = 0; i < 3; ++i) pc.wb[i] = wb_[i];
-    }
+    for (int i = 0; i < 3; ++i) pc.wb[i] = wb_[i].load(std::memory_order_relaxed);
     pc.wb[3] = kPqScale;
     for (int i = 0; i < 3; ++i) {
         pc.ccm0[i] = ccm_[i];
@@ -1030,7 +918,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                             0, 1, &isp_set, 0, nullptr);
     vkCmdPushConstants(f.cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
+    dispatch_banded(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
                   (static_cast<uint32_t>(out_h_) / 2 + 7) / 8, 1);
 
     // ── Chroma denoise (CD): out_buf luma + noisy chroma scratch -> out_buf CbCr.
@@ -1070,7 +958,7 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
                                 0, 1, &f.cd_dset, 0, nullptr);
         vkCmdPushConstants(f.cmd, chroma_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cp), &cp);
         // One thread per chroma site (one per 2x2 luma quad).
-        vkCmdDispatch(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
                       (static_cast<uint32_t>(out_h_) / 2 + 7) / 8, 1);
     }
 
@@ -1106,11 +994,17 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot,
 bool RawVideoPipeline::retire(int inflight_idx) {
     InFlight& f = inflight_[inflight_idx];
     VkResult wr = vkWaitForFences(vk_.device(), 1, &f.fence, VK_TRUE, 2'000'000'000ull);
-    vkResetFences(vk_.device(), 1, &f.fence);
     const int64_t gpu_dt = clock_ns(CLOCK_MONOTONIC) - f.submit_ns;
     prof_gpu_ns_ += gpu_dt;
     if (gpu_dt > prof_gpu_max_ns_) prof_gpu_max_ns_ = gpu_dt;
-    if (wr != VK_SUCCESS) { LOGE("ISP dispatch fence timeout"); return false; }
+    if (wr != VK_SUCCESS) {
+        // Do NOT reset the fence here: on timeout the submission is still in
+        // flight, and resetting a pending fence is undefined — the next wait on
+        // this slot would then block forever (or pass spuriously).
+        LOGE("ISP dispatch fence timeout");
+        return false;
+    }
+    vkResetFences(vk_.device(), 1, &f.fence);
     return true;
 }
 
@@ -1122,7 +1016,7 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
     const int64_t deq_dt = clock_ns(CLOCK_MONOTONIC) - deq_t0;
     prof_encwait_ns_ += deq_dt;
     if (deq_dt > prof_encwait_max_ns_) prof_encwait_max_ns_ = deq_dt;
-    if (idx < 0) { ++frames_dropped_; return false; }
+    if (idx < 0) { frames_dropped_.fetch_add(1, std::memory_order_relaxed); return false; }
 
     size_t cap = 0;
     uint8_t* dst = AMediaCodec_getInputBuffer(codec_, static_cast<size_t>(idx), &cap);
@@ -1161,20 +1055,20 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
     prof_last_ns_ = now;
     if (++prof_count_ >= kProfileWindow) {
         double fps = prof_wall_ns_ > 0 ? 1e9 * prof_count_ / double(prof_wall_ns_) : 0.0;
-        long long drops = static_cast<long long>(frames_dropped_ - prof_drops_base_);
-        LOGI("%.1f fps | gpu %.1f/%.0fms  enc-wait %.1f/%.0fms  cam-gap %.0fms  copy %.1fms  drops %lld | td=%s nlm=%s dm=%s cd=%s",
+        long long drops = static_cast<long long>(frames_dropped_.load(std::memory_order_relaxed) - prof_drops_base_);
+        LOGI("%.1f fps | gpu %.1f/%.0fms  enc-wait %.1f/%.0fms  cam-gap %.0fms  copy %.1fms  drops %lld | nlm=%s dm=%s cd=%s",
              fps,
              prof_gpu_ns_ / 1e6 / prof_count_, prof_gpu_max_ns_ / 1e6,
              prof_encwait_ns_ / 1e6 / prof_count_, prof_encwait_max_ns_ / 1e6,
-             prof_gap_max_ns_ / 1e6,
+             prof_gap_max_ns_.load(std::memory_order_relaxed) / 1e6,
              prof_copy_ns_ / 1e6 / prof_count_, drops,
-             temporal_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
              denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
              demosaic_hq_.load(std::memory_order_relaxed) ? "HQ" : "Malvar",
              chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
         prof_count_ = 0; prof_gpu_ns_ = prof_copy_ns_ = prof_encwait_ns_ = prof_wall_ns_ = 0;
-        prof_gpu_max_ns_ = prof_encwait_max_ns_ = prof_gap_max_ns_ = 0;
-        prof_drops_base_ = frames_dropped_;
+        prof_gpu_max_ns_ = prof_encwait_max_ns_ = 0;
+        prof_gap_max_ns_.store(0, std::memory_order_relaxed);
+        prof_drops_base_ = frames_dropped_.load(std::memory_order_relaxed);
     }
     return true;
 }
@@ -1185,16 +1079,14 @@ void RawVideoPipeline::pipeline_loop() {
     cpuaff::pin_current_thread_to_fast_cores("RawVideo");
     cpuaff::raise_current_thread_priority(-10);
 
-    // Spatio-temporal NLM needs a causal window: the current (centre) frame is
-    // denoised using itself + the kTemporalPast most recent frames as extra patch
-    // sources. The window's staging slots stay resident: a slot stays alive for
-    // kTemporalPast more frames after being the centre, then is freed as it ages
-    // out. GPU compute for frame N overlaps with CPU readback+encode of frame N-1
-    // via the kInFlight-deep in-flight ring. Runs during AND after capture; exits
-    // once the store is sealed and fully drained (the finalize tail).
+    // The NLM is spatial-only, so a staging slot is needed exactly as long as the
+    // GPU job reading it is in flight: it is released when that job retires. An
+    // earlier revision held each slot for two extra frames to feed a temporal
+    // window that the shader never read, which pinned 2 of the 5 slots for
+    // nothing. GPU compute for frame N overlaps with CPU readback+encode of frame
+    // N-1 via the kInFlight-deep in-flight ring. Runs during AND after capture;
+    // exits once the store is sealed and fully drained (the finalize tail).
     const size_t frame_bytes = static_cast<size_t>(raw_w_) * raw_h_ * 2;
-    int hist[kTemporalPast];                    // staging slots of recent past frames (hist[0]=t-1)
-    for (int k = 0; k < kTemporalPast; ++k) hist[k] = -1;
 
     // In-flight ring rotation: submit frame N's GPU work, then retire+encode
     // frame N-1 while the GPU runs. This overlaps GPU compute with CPU
@@ -1204,10 +1096,19 @@ void RawVideoPipeline::pipeline_loop() {
 
     for (;;) {
         // Develop nothing until white balance is valid, else the clip opens on a
-        // green (1/1/1 gain) cast. Frames keep buffering in the store while we wait.
+        // green (1/1/1 gain) cast. Frames keep buffering in the store while we
+        // wait. Bail out if the recording stops first — otherwise a clip that
+        // never received a neutral would park this thread forever.
         if (!wb_valid_.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
+            std::unique_lock<std::mutex> lk(wb_wait_mtx_);
+            wb_cv_.wait(lk, [this] {
+                return wb_valid_.load(std::memory_order_acquire) ||
+                       stopping_.load(std::memory_order_acquire);
+            });
+            if (!wb_valid_.load(std::memory_order_acquire)) {
+                LOGE("stopped before any white balance arrived — no frames developed");
+                break;
+            }
         }
 
         int sslot = -1;
@@ -1221,15 +1122,10 @@ void RawVideoPipeline::pipeline_loop() {
         store_.reclaim(std::move(fr));
         staging_busy_[sslot] = true;
 
-        // Past slots, clamped to the newest available at the clip's start.
-        int past[kTemporalPast];
-        for (int k = 0; k < kTemporalPast; ++k)
-            past[k] = (hist[k] >= 0) ? hist[k] : (k == 0 ? sslot : past[k - 1]);
-
         // Submit this frame's GPU work on the current in-flight slot.
         inflight_[cur].staging_slot = sslot;
         inflight_[cur].ts_ns        = ts;
-        bool submitted = record_and_submit(cur, sslot, past);
+        bool submitted = record_and_submit(cur, sslot);
 
         // Retire + encode the PREVIOUS frame while this one's GPU work runs.
         // This is where the overlap happens: the GPU computes frame N while the
@@ -1238,29 +1134,27 @@ void RawVideoPipeline::pipeline_loop() {
             if (retire(prev))
                 submit_to_encoder(inflight_[prev].out_buf, inflight_[prev].ts_ns);
             else
-                ++frames_dropped_;
+                frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+            // The GPU is done with that job's input, so its staging slot is free.
+            release_staging(inflight_[prev].staging_slot);
         }
 
         if (submitted) {
             prev = cur;
             cur  = (cur + 1) % kInFlight;
         } else {
+            // Nothing was queued, so nothing will ever read this slot.
+            release_staging(sslot);
             prev = -1;
-            ++frames_dropped_;
+            frames_dropped_.fetch_add(1, std::memory_order_relaxed);
         }
-
-        // Slide the window: the oldest past slot ages out and is freed (the GPU
-        // is done with it after retire()); the centre becomes hist[0].
-        int aged = hist[kTemporalPast - 1];
-        if (aged >= 0 && aged != sslot) staging_busy_[aged] = false;
-        for (int k = kTemporalPast - 1; k > 0; --k) hist[k] = hist[k - 1];
-        hist[0] = sslot;
     }
 
     // Drain the last in-flight frame that hasn't been retired yet.
     if (prev >= 0) {
         if (retire(prev))
             submit_to_encoder(inflight_[prev].out_buf, inflight_[prev].ts_ns);
+        release_staging(inflight_[prev].staging_slot);
     }
 
     // Flush: signal end-of-stream so the drain thread sees its final packets.
