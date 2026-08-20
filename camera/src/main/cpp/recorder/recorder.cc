@@ -337,6 +337,7 @@ bool Recorder::start_preview(Renderer* renderer) {
         }
         pending_raw_sink_       = raw;
         pending_raw_video_sink_ = raw_video;
+        pending_record_sink_    = record;
     }
 
     // Decide RAW-vs-legacy before the session is built; raw mode changes the
@@ -347,18 +348,26 @@ bool Recorder::start_preview(Renderer* renderer) {
     // the one Java-only Camera2 API (setDynamicRangeProfile / HLG10) belongs to
     // the legacy path. If the device can't serve it, available() is false and we
     // fall back to Java rather than failing the preview.
+    // Prefer the native session on BOTH paths now. On a RAW device it drives the
+    // ISP; on a device without RAW it drives the encoder's input surface
+    // directly, replacing the Java MediaCodec path. Java remains the fallback
+    // whenever the native session can't serve the device.
     use_ndk_ = false;
-    if (video_mode_ == VideoMode::RAW_PQ) {
-        if (!ndk_session_) ndk_session_ = std::make_unique<ndkcam::Session>();
-        if (ndk_session_->init(preview, pending_raw_sink_, pending_raw_video_sink_) &&
-            ndk_session_->start_preview()) {
-            use_ndk_ = true;
-            LOGI("Capture session: native NDK Camera2 (RAW)");
+    if (!ndk_session_) ndk_session_ = std::make_unique<ndkcam::Session>();
+    if (ndk_session_->init(preview, pending_raw_sink_, pending_raw_video_sink_,
+                           pending_record_sink_) &&
+        ndk_session_->start_preview()) {
+        use_ndk_ = true;
+        if (video_mode_ != VideoMode::RAW_PQ) {
+            LOGI("Capture session: native NDK Camera2 (video %dx%d, zero-copy to encoder)",
+                 ndk_session_->video_width(), ndk_session_->video_height());
         } else {
-            ndk_session_->shutdown();
-            ndk_session_.reset();
-            LOGI("Capture session: Java fallback (native RAW session unavailable)");
+            LOGI("Capture session: native NDK Camera2 (RAW)");
         }
+    } else {
+        ndk_session_->shutdown();
+        ndk_session_.reset();
+        LOGI("Capture session: Java fallback (native session unavailable)");
     }
     if (!use_ndk_) {
         jni::hdr_set_raw_video(video_mode_ == VideoMode::RAW_PQ);

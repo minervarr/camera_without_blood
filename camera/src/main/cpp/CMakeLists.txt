@@ -157,6 +157,7 @@ add_library(camera_recorder SHARED
 
     # Camera2 NDK
     camera/ndk_session.cc
+    camera/ndk_encoder.cc
     camera/dng_writer.cc
     camera/dng_meta_source.cc
     camera/still_writer.cc

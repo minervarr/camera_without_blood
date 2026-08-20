@@ -6,6 +6,7 @@
 #include <media/NdkImageReader.h>
 
 #include "../jni/jni_camera.hh"
+#include "ndk_encoder.hh"
 #include "dng_writer.hh"
 
 #include <atomic>
@@ -43,10 +44,21 @@ public:
 
     // Opens the camera and resolves stream sizes. Safe to call when the device
     // has no RAW support: returns false and leaves available() false.
-    bool init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink raw_video);
+    bool init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink raw_video,
+              jni::RecordSink record);
     void shutdown();
 
     bool available() const { return available_; }
+
+    // True when this device has no RAW16 stream but the native video path can
+    // still drive it: preview + the encoder's input surface, zero-copy. This is
+    // the replacement for the Java "LEGACY_HLG" path, which on the verified
+    // device was never HLG at all — it reports no dynamic range profiles and no
+    // Main10 encoder, so that path was plain 8-bit SDR behind a misleading name.
+    bool video_available() const { return video_available_; }
+
+    int32_t video_width()  const { return encoder_.width(); }
+    int32_t video_height() const { return encoder_.height(); }
 
     bool start_preview();
     void stop_preview();
@@ -82,6 +94,7 @@ private:
     jni::PreviewSink  preview_sink_;
     jni::RawSink      raw_sink_;
     jni::RawVideoSink raw_video_sink_;
+    jni::RecordSink   record_sink_;
 
     ACameraManager*        manager_ = nullptr;
     ACameraDevice*         device_  = nullptr;
@@ -97,6 +110,17 @@ private:
     ANativeWindow*         raw_window_ = nullptr;
     ACaptureSessionOutput* raw_output_ = nullptr;
     ACameraOutputTarget*   raw_target_ = nullptr;
+
+    // Video (non-RAW) path: the encoder's input surface is a capture target, so
+    // frames never touch the CPU.
+    Encoder                encoder_;
+    ACaptureSessionOutput* video_output_ = nullptr;
+    ACameraOutputTarget*   video_target_ = nullptr;
+    bool                   video_available_ = false;
+    bool                   has_manual_post_ = false;
+    // Encoder-size candidates, largest first. Encoder::configure walks these and
+    // the codec itself picks the winner.
+    std::vector<Encoder::Size> video_sizes_;
 
     ACaptureRequest*       request_ = nullptr;
 

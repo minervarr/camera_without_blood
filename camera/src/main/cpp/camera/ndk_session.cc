@@ -99,16 +99,21 @@ bool Session::pick_camera() {
             ACameraMetadata_getConstEntry(meta, ACAMERA_LENS_FACING, &e) == ACAMERA_OK &&
             e.count >= 1 && e.data.u8[0] == ACAMERA_LENS_FACING_BACK;
 
-        if (back && has_capability(meta, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
-            auto raws = output_sizes(meta, AIMAGE_FORMAT_RAW16);
-            if (!raws.empty()) {
-                // Largest RAW16 stream: the sensor's full binned readout.
-                auto best = *std::max_element(raws.begin(), raws.end(),
-                    [](const StreamSize& a, const StreamSize& b) {
-                        return int64_t(a.w) * a.h < int64_t(b.w) * b.h;
-                    });
-                raw_w_ = best.w;
-                raw_h_ = best.h;
+        if (back && !found) {
+            const bool has_raw =
+                has_capability(meta, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_RAW);
+            auto raws = has_raw ? output_sizes(meta, AIMAGE_FORMAT_RAW16)
+                                : std::vector<StreamSize>{};
+            if (true) {
+                if (!raws.empty()) {
+                    // Largest RAW16 stream: the sensor's full binned readout.
+                    auto best = *std::max_element(raws.begin(), raws.end(),
+                        [](const StreamSize& a, const StreamSize& b) {
+                            return int64_t(a.w) * a.h < int64_t(b.w) * b.h;
+                        });
+                    raw_w_ = best.w;
+                    raw_h_ = best.h;
+                }
 
                 // Preview: the largest PRIVATE output at (or under) 1080p whose
                 // aspect matches the sensor, so the on-screen framing is honest.
@@ -127,6 +132,27 @@ bool Session::pick_camera() {
                 camera_id_ = ids->cameraIds[i];
                 found = true;
 
+                // MANUAL_POST_PROCESSING lets the video path take the HAL's
+                // baked-in contrast curve out of the loop (flat tonemap, NR
+                // off) — the concrete image-quality win over the Java path.
+                has_manual_post_ = has_capability(
+                    meta, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING);
+
+                // Video candidates, largest first, at the sensor's aspect. The
+                // encoder decides which is real (see Encoder::configure): a
+                // capability-table heuristic is what pinned the Java path to
+                // 1440x1088 on a device whose encoder does 2560x1440@30.
+                const float vwant = sensor_aspect(meta);
+                for (const auto& sz : output_sizes(meta, AIMAGE_FORMAT_PRIVATE)) {
+                    const float ar = float(sz.w) / float(sz.h);
+                    if (std::abs(ar - vwant) > 0.05f) continue;
+                    video_sizes_.push_back(Encoder::Size{ sz.w, sz.h });
+                }
+                std::sort(video_sizes_.begin(), video_sizes_.end(),
+                          [](const Encoder::Size& a, const Encoder::Size& b) {
+                              return int64_t(a.w) * a.h > int64_t(b.w) * b.h;
+                          });
+
                 // Reuse the DNG metadata gatherer's tag set by filling here.
                 ACameraMetadata_const_entry q{};
                 if (ACameraMetadata_getConstEntry(meta, ACAMERA_SENSOR_INFO_COLOR_FILTER_ARRANGEMENT, &q) == ACAMERA_OK && q.count >= 1)
@@ -144,15 +170,22 @@ bool Session::pick_camera() {
     ACameraManager_deleteCameraIdList(ids);
 
     if (!found) {
-        LOGI("ndk: no back camera with a RAW16 stream — the Java session must handle this device");
+        LOGI("ndk: no usable back camera — the Java session must handle this device");
         return false;
     }
-    LOGI("ndk: camera %s  RAW16 %dx%d  preview %dx%d  fps [%d,%d]",
-         camera_id_.c_str(), raw_w_, raw_h_, prev_w_, prev_h_, fps_min_, fps_max_);
+    if (raw_w_ > 0) {
+        LOGI("ndk: camera %s  RAW16 %dx%d  preview %dx%d  fps [%d,%d]",
+             camera_id_.c_str(), raw_w_, raw_h_, prev_w_, prev_h_, fps_min_, fps_max_);
+    } else {
+        LOGI("ndk: camera %s  no RAW  preview %dx%d  fps [%d,%d]  manual-post=%d  %zu video sizes",
+             camera_id_.c_str(), prev_w_, prev_h_, fps_min_, fps_max_,
+             int(has_manual_post_), video_sizes_.size());
+    }
     return true;
 }
 
-bool Session::init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink raw_video) {
+bool Session::init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink raw_video,
+                   jni::RecordSink record) {
     // Idempotent: re-initialising over a live session would overwrite manager_
     // and device_ and leak both, leaving the camera open forever. The HAL then
     // refuses every subsequent client ("Could not initialize client from HAL"),
@@ -162,6 +195,7 @@ bool Session::init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink
     preview_sink_   = std::move(preview);
     raw_sink_       = std::move(raw);
     raw_video_sink_ = std::move(raw_video);
+    record_sink_    = std::move(record);
 
     manager_ = ACameraManager_create();
     if (!manager_) { LOGE("ndk: ACameraManager_create failed"); return false; }
@@ -194,22 +228,44 @@ bool Session::configure_session() {
     AImageReader_setImageListener(preview_reader_, &preview_listener_);
     if (AImageReader_getWindow(preview_reader_, &preview_window_) != AMEDIA_OK) return false;
 
-    if (AImageReader_new(raw_w_, raw_h_, AIMAGE_FORMAT_RAW16, kRawBuffers,
-                         &raw_reader_) != AMEDIA_OK) {
-        LOGE("ndk: RAW16 AImageReader failed");
-        return false;
+    const bool raw_path = raw_w_ > 0;
+    if (raw_path) {
+        if (AImageReader_new(raw_w_, raw_h_, AIMAGE_FORMAT_RAW16, kRawBuffers,
+                             &raw_reader_) != AMEDIA_OK) {
+            LOGE("ndk: RAW16 AImageReader failed");
+            return false;
+        }
+        raw_listener_ = { this, on_raw_image };
+        AImageReader_setImageListener(raw_reader_, &raw_listener_);
+        if (AImageReader_getWindow(raw_reader_, &raw_window_) != AMEDIA_OK) return false;
+    } else {
+        // No RAW: the encoder's own input surface becomes the video stream, so
+        // the camera writes encodable frames directly and nothing is copied.
+        if (video_sizes_.empty()) {
+            LOGI("ndk: no video sizes at the sensor aspect");
+            return false;
+        }
+        const int32_t fps = fps_max_ > 0 ? fps_max_ : 30;
+        if (!encoder_.configure(video_sizes_.data(),
+                                static_cast<int>(video_sizes_.size()), fps, record_sink_))
+            return false;
+        video_available_ = true;
     }
-    raw_listener_ = { this, on_raw_image };
-    AImageReader_setImageListener(raw_reader_, &raw_listener_);
-    if (AImageReader_getWindow(raw_reader_, &raw_window_) != AMEDIA_OK) return false;
 
-    // Both streams stay configured for the whole session; recording only changes
-    // which targets the repeating request carries, so REC never reconfigures.
+    // Every stream stays configured for the whole session; recording only
+    // changes which targets the repeating request carries, so REC never
+    // reconfigures the session.
     if (ACaptureSessionOutputContainer_create(&outputs_) != ACAMERA_OK) return false;
     if (ACaptureSessionOutput_create(preview_window_, &preview_output_) != ACAMERA_OK) return false;
-    if (ACaptureSessionOutput_create(raw_window_, &raw_output_) != ACAMERA_OK) return false;
     ACaptureSessionOutputContainer_add(outputs_, preview_output_);
-    ACaptureSessionOutputContainer_add(outputs_, raw_output_);
+    if (raw_path) {
+        if (ACaptureSessionOutput_create(raw_window_, &raw_output_) != ACAMERA_OK) return false;
+        ACaptureSessionOutputContainer_add(outputs_, raw_output_);
+    } else {
+        if (ACaptureSessionOutput_create(encoder_.input_surface(), &video_output_) != ACAMERA_OK)
+            return false;
+        ACaptureSessionOutputContainer_add(outputs_, video_output_);
+    }
 
     sess_cbs_.context   = this;
     sess_cbs_.onReady   = on_session_ready;
@@ -221,7 +277,12 @@ bool Session::configure_session() {
     }
 
     if (ACameraOutputTarget_create(preview_window_, &preview_target_) != ACAMERA_OK) return false;
-    if (ACameraOutputTarget_create(raw_window_, &raw_target_) != ACAMERA_OK) return false;
+    if (raw_path) {
+        if (ACameraOutputTarget_create(raw_window_, &raw_target_) != ACAMERA_OK) return false;
+    } else {
+        if (ACameraOutputTarget_create(encoder_.input_surface(), &video_target_) != ACAMERA_OK)
+            return false;
+    }
     return true;
 }
 
@@ -244,18 +305,36 @@ bool Session::build_repeating(bool with_raw) {
     // Java path did) froze the on-screen image; the ISP now submits its passes
     // in preemptible bands, so the compositor can be served without stalling it.
     ACaptureRequest_addTarget(request_, preview_target_);
-    if (with_raw) ACaptureRequest_addTarget(request_, raw_target_);
+    if (with_raw) {
+        ACaptureRequest_addTarget(request_, raw_target_ ? raw_target_ : video_target_);
+    }
 
     if (fps_max_ > 0) {
         const int32_t fps[2] = { fps_min_, fps_max_ };
         ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps);
     }
-    if (with_raw) {
+    if (with_raw && raw_target_) {
         // One white balance per clip: lock AWB so the ISP's gains stay valid for
         // the whole recording, and report the locked neutral once.
         const uint8_t lock = 1;
         ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AWB_LOCK, 1, &lock);
         neutral_sent_.store(false, std::memory_order_release);
+    }
+    if (!raw_target_ && has_manual_post_) {
+        // The video path's actual image-quality win: take the HAL's baked-in
+        // contrast curve and its edge/noise processing out of the loop. A
+        // straight-line tonemap is the flattest curve the API can express, and
+        // it is what makes the recording gradeable instead of pre-cooked.
+        const uint8_t tm_mode = ACAMERA_TONEMAP_MODE_CONTRAST_CURVE;
+        ACaptureRequest_setEntry_u8(request_, ACAMERA_TONEMAP_MODE, 1, &tm_mode);
+        const float curve[4] = { 0.0f, 0.0f, 1.0f, 1.0f };   // (in,out) pairs
+        ACaptureRequest_setEntry_float(request_, ACAMERA_TONEMAP_CURVE_RED,   4, curve);
+        ACaptureRequest_setEntry_float(request_, ACAMERA_TONEMAP_CURVE_GREEN, 4, curve);
+        ACaptureRequest_setEntry_float(request_, ACAMERA_TONEMAP_CURVE_BLUE,  4, curve);
+        const uint8_t nr_off = ACAMERA_NOISE_REDUCTION_MODE_OFF;
+        ACaptureRequest_setEntry_u8(request_, ACAMERA_NOISE_REDUCTION_MODE, 1, &nr_off);
+        const uint8_t sharp_off = ACAMERA_EDGE_MODE_OFF;
+        ACaptureRequest_setEntry_u8(request_, ACAMERA_EDGE_MODE, 1, &sharp_off);
     }
 
     ACameraCaptureSession_captureCallbacks cbs{};
@@ -276,6 +355,8 @@ void Session::stop_preview() {
 }
 
 bool Session::start_recording() {
+    // The encoder must be running before the camera starts filling its surface.
+    if (video_available_ && !encoder_.start()) return false;
     if (!build_repeating(true)) return false;
     recording_.store(true, std::memory_order_release);
     return true;
@@ -284,6 +365,7 @@ bool Session::start_recording() {
 void Session::stop_recording() {
     recording_.store(false, std::memory_order_release);
     build_repeating(false);
+    if (video_available_) encoder_.stop();
 }
 
 bool Session::take_photo(const char* base_path, int shots) {
@@ -419,13 +501,17 @@ void Session::teardown_session() {
     if (request_)        { ACaptureRequest_free(request_);                 request_ = nullptr; }
     if (preview_target_) { ACameraOutputTarget_free(preview_target_);      preview_target_ = nullptr; }
     if (raw_target_)     { ACameraOutputTarget_free(raw_target_);          raw_target_ = nullptr; }
+    if (video_target_)   { ACameraOutputTarget_free(video_target_);        video_target_ = nullptr; }
     if (outputs_)        { ACaptureSessionOutputContainer_free(outputs_);  outputs_ = nullptr; }
     if (preview_output_) { ACaptureSessionOutput_free(preview_output_);    preview_output_ = nullptr; }
     if (raw_output_)     { ACaptureSessionOutput_free(raw_output_);        raw_output_ = nullptr; }
+    if (video_output_)   { ACaptureSessionOutput_free(video_output_);      video_output_ = nullptr; }
 }
 
 void Session::shutdown() {
     recording_.store(false, std::memory_order_release);
+    encoder_.stop();
+    video_available_ = false;
     teardown_session();
 
     // Clear the listeners before deleting the readers, or a frame already in

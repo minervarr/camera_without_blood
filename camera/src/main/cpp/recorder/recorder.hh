@@ -122,6 +122,7 @@ private:
     bool                              use_ndk_ = false;
     jni::RawSink                      pending_raw_sink_{};
     jni::RawVideoSink                 pending_raw_video_sink_{};
+    jni::RecordSink                   pending_record_sink_{};
     std::unique_ptr<aud::AudioCapture> audio_;
     std::unique_ptr<mux::Muxer>       muxer_;
     std::unique_ptr<isp::RawVideoPipeline> raw_pipeline_;
