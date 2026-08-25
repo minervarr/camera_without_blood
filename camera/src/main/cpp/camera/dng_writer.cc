@@ -106,6 +106,20 @@ bool write_dng(const std::string& path, const uint16_t* data, const DngMeta& m) 
 
     if (m.has_neutral) dng.SetAsShotNeutral(3, m.as_shot_neutral);
 
+    // Only emit it when it says something: 0.0 is the spec default, and an
+    // explicit zero on every single shot is noise in the file.
+    if (m.baseline_exposure != 0.0) {
+        dng.SetBaselineExposure(m.baseline_exposure);
+        LOGI("BaselineExposure %+.3f EV", m.baseline_exposure);
+    }
+
+    // The sensor's noise model, when the HAL reported one. See DngMeta.
+    if (m.has_noise_profile && m.noise_profile_count > 0) {
+        dng.SetNoiseProfile(static_cast<unsigned int>(m.noise_profile_count), m.noise_profile);
+        LOGI("NoiseProfile: %d values, ch0 S=%.3e O=%.3e",
+             m.noise_profile_count, m.noise_profile[0], m.noise_profile[1]);
+    }
+
     // Pixel data: copy into a tight little-endian 16-bit buffer, dropping any
     // row padding (RAW16 stride often exceeds width*2).
     const size_t tight_stride = static_cast<size_t>(m.width) * 2;

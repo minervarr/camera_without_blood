@@ -28,3 +28,6 @@
 [submodule "libs/firstparty/app_shell"]
 	path = libs/firstparty/app_shell
 	url = https://github.com/minervarr/app_shell
+[submodule "libs/thirdparty/libjxl"]
+	path = libs/thirdparty/libjxl
+	url = https://github.com/libjxl/libjxl

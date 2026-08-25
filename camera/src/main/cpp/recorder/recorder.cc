@@ -110,15 +110,24 @@ void Recorder::accumulate_bracket(const char* path, const uint16_t* data, int w,
     const dng::DngMeta meta = raw_meta_;     // static tags (CFA, colour matrices)
 
     enqueue_bracket_job(
-        [frames = std::move(frames), meta, base]() mutable {
+        [this, frames = std::move(frames), meta, base]() mutable {
             // Static HDR: merge the bracket into one Bayer DNG (kept RAW; the user
             // develops the HDR on a PC). Reached only for the 3-shot Static modes.
             hdr::MergeResult r = hdr::merge_raw_bracket(frames, meta);
             if (!r.ok) return;  // sources (if any) already on disk — nothing lost
             const std::string out = base + ".dng";
-            if (hdr::write_merged_dng(r, out)) jni::session_record_file(out);
+            if (!hdr::write_merged_dng(r, out)) return;
+            jni::session_record_file(out);
+
+            // No viewable copy is written. The DNG is the deliverable: developing
+            // and rendering happens in the post app, which reads the DNG and has
+            // the whole scene to work with rather than a baked-in interpretation
+            // of it. A JXL used to be written here — it was a second, lossier
+            // copy of information the DNG already holds, and (Android cannot
+            // decode JXL) it was not even viewable on the device that shot it.
         });
 }
+
 
 // Single consumer: keeps bursts strictly serialized (they share the output
 // naming) while never blocking the producer, which is the camera callback.
@@ -302,6 +311,15 @@ bool Recorder::start_preview(Renderer* renderer) {
             if (neutral) { for (int i = 0; i < 3; ++i) m.as_shot_neutral[i] = neutral[i]; m.has_neutral = true; }
             if (black)   { for (int i = 0; i < 4; ++i) m.black_level[i] = black[i]; }
             if (white > 0) m.white_level = white;
+            // The sensor's per-shot noise model, so anything developing this DNG
+            // later knows how noisy it actually is instead of estimating it.
+            if (ndk_session_) {
+                int npc = 0;
+                if (ndk_session_->noise_profile(m.noise_profile, npc) && npc > 0) {
+                    m.noise_profile_count = npc;
+                    m.has_noise_profile = true;
+                }
+            }
             // 1) Write the per-shot DNG when it's a kept output: the single FAST
             //    DNG (mode 0), or the source DNGs of "Static + RAW set" (mode 2).
             //    Static-merged (mode 1) keeps only the merged DNG. Register only
@@ -310,46 +328,6 @@ bool Recorder::start_preview(Renderer* renderer) {
             if (pm == 0 /*FAST*/ || pm == 2 /*STATIC + RAW set*/) {
                 if (dng::write_dng(path, data, m)) jni::session_record_file(path);
                 else LOGE("Failed to write still DNG: %s", path);
-
-                // A viewable copy next to the archival DNG: same RAW data,
-                // developed to 16-bit sRGB and saved as a lossless PNG. Nothing
-                // is thrown away that 8 bits would have discarded, and no extra
-                // camera stream is involved — a 3-stream preview+RAW+YUV combo
-                // is not guaranteed, and this stays consistent with the DNG by
-                // construction.
-                //
-                // Off the camera thread: develop + deflate of a 12 MP frame runs
-                // in seconds, and blocking here would stall capture (the same
-                // reason the non-RAW YUV->PNG path has a worker).
-                std::string png_path = path;
-                const size_t dot = png_path.rfind('.');
-                if (dot != std::string::npos) png_path.resize(dot);
-                png_path += ".png";
-
-                std::vector<uint16_t> bayer(static_cast<size_t>(w) * h);
-                const int src_stride_px = stride > 0 ? stride / 2 : w;
-                for (int row = 0; row < h; ++row)
-                    std::memcpy(&bayer[static_cast<size_t>(row) * w],
-                                data + static_cast<size_t>(row) * src_stride_px,
-                                static_cast<size_t>(w) * sizeof(uint16_t));
-
-                float nv[3] = {1.0f, 1.0f, 1.0f};
-                if (neutral) for (int i = 0; i < 3; ++i) nv[i] = neutral[i];
-
-                dng::DngMeta pm_meta = m;
-                enqueue_bracket_job([this, png_path, bayer = std::move(bayer),
-                                     w, h, pm_meta, nv] {
-                    std::vector<uint16_t> rgb;
-                    if (!cam::develop_raw_to_rgb16(bayer.data(), w, h,
-                                                   w * int(sizeof(uint16_t)),
-                                                   pm_meta, nv, rgb)) {
-                        LOGE("RAW develop failed for %s", png_path.c_str());
-                        return;
-                    }
-                    if (cam::write_png_rgb16(png_path, rgb.data(), w, h,
-                                             pm_meta.orientation_deg))
-                        jni::session_record_file(png_path);
-                });
             }
             // 2) Accumulate for the merge; produces the merged output when complete.
             accumulate_bracket(path, data, w, h, stride, neutral, black, white,
@@ -399,16 +377,22 @@ bool Recorder::start_preview(Renderer* renderer) {
     if (ndk_session_->init(preview, pending_raw_sink_, pending_raw_video_sink_,
                            pending_record_sink_) &&
         ndk_session_->start_preview()) {
+        ndk_session_->set_still_nr(still_nr_.load());
+        ndk_session_->set_focus(focus_manual_.load(), focus_diopters_.load());
         use_ndk_ = true;
         if (video_mode_ != VideoMode::RAW_PQ) {
-            LOGI("Capture session: native NDK Camera2 (video %dx%d, zero-copy to encoder)",
+            LOGI("Capture session: native NDK Camera2 (non-RAW, %dx%d video; "
+                 "encoder surface joins at REC)",
                  ndk_session_->video_width(), ndk_session_->video_height());
         } else {
             LOGI("Capture session: native NDK Camera2 (RAW)");
         }
-    } else {
-        ndk_session_->shutdown();
-        ndk_session_.reset();
+    }
+    if (!use_ndk_) {
+        if (ndk_session_) {
+            ndk_session_->shutdown();
+            ndk_session_.reset();
+        }
         LOGI("Capture session: Java fallback (native session unavailable)");
     }
     if (!use_ndk_) {
@@ -667,6 +651,62 @@ void Recorder::set_photo_mode(bool photo) {
 void Recorder::set_renderer(Renderer* renderer) {
     std::lock_guard<std::mutex> lock(renderer_mutex_);
     renderer_ = renderer;
+}
+
+void Recorder::set_still_nr(bool on) {
+    still_nr_.store(on);
+    if (ndk_session_) ndk_session_->set_still_nr(on);
+}
+
+bool Recorder::manual_focus_available() const {
+    return use_ndk_ && ndk_session_ && ndk_session_->manual_focus_available();
+}
+
+float Recorder::max_focus_diopters() const {
+    return (use_ndk_ && ndk_session_) ? ndk_session_->max_focus_diopters() : 0.0f;
+}
+
+float Recorder::reported_focus_diopters() const {
+    return (use_ndk_ && ndk_session_) ? ndk_session_->reported_focus_diopters() : 0.0f;
+}
+
+void Recorder::set_focus(bool manual, float diopters) {
+    focus_manual_.store(manual);
+    focus_diopters_.store(diopters);
+    if (use_ndk_ && ndk_session_) ndk_session_->set_focus(manual, diopters);
+}
+
+bool Recorder::loupe_available() const {
+    return use_ndk_ && ndk_session_ && ndk_session_->loupe_available();
+}
+
+int Recorder::loupe_max_factor() const {
+    if (!use_ndk_ || !ndk_session_) return 0;
+    const int hi = ndk_session_->loupe_width();
+    const int on_screen = display_w_.load();
+    if (hi <= 0 || on_screen <= 0) return 0;
+    // The frame is drawn about `on_screen` px wide, so a zoom of N is honest
+    // only while hi / N >= on_screen. Rounded down, then clamped to the steps
+    // the UI offers.
+    const int usable = hi / on_screen;
+    return usable >= 4 ? 4 : (usable >= 2 ? 2 : 0);
+}
+
+bool Recorder::set_loupe(bool on) {
+    // The reconfigure would tear the preview stream out from under an active
+    // recording, and a 4K preview would eat the RAW path's frame budget.
+    if (state_ != State::PREVIEW) return false;
+    if (!use_ndk_ || !ndk_session_) return false;
+    // The renderer caches its Vulkan imports per AHardwareBuffer; the buffers
+    // change size across the reconfigure, so drop them first.
+    {
+        std::lock_guard<std::mutex> lock(renderer_mutex_);
+        if (renderer_) renderer_->clear_camera_frames();
+    }
+    if (!ndk_session_->set_loupe(on)) return false;
+    // The rebuilt repeating request starts from the template again.
+    ndk_session_->set_focus(focus_manual_.load(), focus_diopters_.load());
+    return true;
 }
 
 void Recorder::set_denoise(bool on) {

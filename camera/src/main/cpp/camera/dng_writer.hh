@@ -39,6 +39,28 @@ struct DngMeta {
     bool     has_neutral = false;
     double   as_shot_neutral[3] = {1.0, 1.0, 1.0};
 
+    // DNG BaselineExposure (50730), in stops. Non-zero when the stored data is
+    // deliberately scaled so WhiteLevel is NOT diffuse white: a merged bracket
+    // reserves the top of its range for highlights recovered above the
+    // reference exposure, which puts everything else that many stops down. The
+    // tag is how a developer knows to open back up; without it the merged file
+    // renders exactly `max_boost` stops darker than the single shot of the same
+    // scene, which is what made STATIC look "less light" next to FAST.
+    double   baseline_exposure = 0.0;
+
+    // DNG NoiseProfile (51041): one (S, O) pair per CFA channel, in CFAPattern
+    // order. Variance at normalised signal x is S*x + O — shot noise scales with
+    // the signal, read noise does not. Straight from ACAMERA_SENSOR_NOISE_PROFILE,
+    // per shot, so it tracks the ISO actually used.
+    //
+    // This is what lets a denoiser downstream know how noisy the frame really is
+    // instead of estimating it from the pixels. It matters most for a learned
+    // model: told the wrong noise level, it either smears real detail away or
+    // synthesises texture the scene never had.
+    bool     has_noise_profile = false;
+    int32_t  noise_profile_count = 0;          // 2 * CFA channels (8 for Bayer)
+    double   noise_profile[8]{};
+
     int32_t  orientation_deg = 0;  // sensor mount orientation (0/90/180/270)
 
     std::string camera_model = "camera_without_blood";

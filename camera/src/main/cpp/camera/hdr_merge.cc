@@ -1,5 +1,6 @@
 #include "hdr_merge.hh"
 
+#include "raw_develop.hh"   // cam::kPqScale
 #include "mtb_align.hh"
 #include "../logger.hh"
 
@@ -92,6 +93,14 @@ MergeResult merge_raw_bracket(const std::vector<BracketFrame>& frames,
 
     // Output range: keep mid-tones at the reference (0 EV) brightness with black at
     // 0, recovered highlights filling the headroom up to 1/min(eRel)x.
+    //
+    // refSpan is only the COUNTS-PER-STOP scale for the 16-bit output; the pixel
+    // loop below normalises every sample against ITS OWN CFA element's black and
+    // white (see the `frac` comment there), which is what the FAST path does in
+    // recorder.cc. Using a mean black to normalise, as this used to, left the two
+    // modes differing by a small per-channel gain on any sensor whose black level
+    // is not equal across the CFA — a slight tint shift between FAST and STATIC
+    // of the same scene.
     const float refBlackMean =
         0.25f * (frames[ref].black[0] + frames[ref].black[1] + frames[ref].black[2] + frames[ref].black[3]);
     const double refWhite = frames[ref].white > 0 ? frames[ref].white
@@ -100,12 +109,21 @@ MergeResult merge_raw_bracket(const std::vector<BracketFrame>& frames,
     double minRel = 1.0;
     for (double e : eRel) minRel = std::min(minRel, e);
     const double maxBoost = minRel > 0 ? 1.0 / minRel : 1.0;
-    const double outWhite = std::min(65535.0, refSpan * maxBoost);
+    // The merged radiance spans refSpan*maxBoost counts. Clamping that to 65535
+    // (as this used to) silently threw away exactly the highlight headroom the
+    // bracket was shot for. Scale to fit instead: when the span overflows 16 bits
+    // the whole range is compressed uniformly, which stays linear and is undone by
+    // the DNG's WhiteLevel. A span that already fits keeps dng_scale == 1.0 so
+    // well-behaved brackets still quantize byte-identically to before.
+    const double fullSpan  = refSpan * maxBoost;
+    const double dngScale  = fullSpan > 65535.0 ? 65535.0 / fullSpan : 1.0;
+    const double outWhite  = fullSpan * dngScale;
 
     std::vector<float> radiance(static_cast<size_t>(W) * H);
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
             double num = 0.0, den = 0.0;
+            bool any_clipped = false;
             for (size_t i = 0; i < frames.size(); ++i) {
                 const int sx = x - shx[i], sy = y - shy[i];
                 if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;  // border-invalid
@@ -113,23 +131,45 @@ MergeResult merge_raw_bracket(const std::vector<BracketFrame>& frames,
                 const float raw   = static_cast<float>(f.data[static_cast<size_t>(sy) * W + sx]);
                 const float bl    = black_at(f, sx, sy);
                 const float white = f.white > 0 ? static_cast<float>(f.white) : static_cast<float>(refWhite);
-                if (raw >= 0.98f * white) continue;                    // clipped -> drop
-                float lin = raw - bl; if (lin < 0) lin = 0;
-                const float v = (white > bl) ? (raw - bl) / (white - bl) : 0.0f;  // exposedness 0..1
+                if (raw >= 0.98f * white) { any_clipped = true; continue; }  // clipped -> drop
+                // Per-CFA-element normalisation: 0 at this element's black, 1.0 at
+                // its clip. Doubles as the exposedness weight AND as the radiance
+                // sample, so the two cannot disagree.
+                float v = (white > bl) ? (raw - bl) / (white - bl) : 0.0f;
+                if (v < 0.0f) v = 0.0f;
                 const double w = std::exp(-((v - 0.5) * (v - 0.5)) / (2.0 * 0.2 * 0.2)) + 1e-3;
-                num += w * (static_cast<double>(lin) / eRel[i]);       // radiance in ref counts
+                num += w * (static_cast<double>(v) / eRel[i]);   // radiance, ref clip == 1.0
                 den += w;
             }
             double merged;
             if (den > 0.0) {
                 merged = num / den;
-            } else {  // everything clipped/invalid here -> fall back to the ref pixel
+            } else if (any_clipped) {
+                // Every frame clipped here, INCLUDING the longest exposure. Such a
+                // pixel is by definition at or above the brightest frame's ceiling,
+                // which in this normalisation is maxBoost — the top of the merged
+                // range. It used to fall back to the REFERENCE frame's value, i.e.
+                // ~1.0, while a neighbour that had even one valid frame was boosted
+                // up to maxBoost: a maxBoost-fold step at the edge of every blown
+                // highlight, per channel, which is what broke the colour there.
+                // It also sat below the develop's highlight-reconstruction knee
+                // (0.95*maxBoost), so the reconstruction that de-tints blown
+                // highlights for FAST never once fired for STATIC.
+                merged = maxBoost;
+            } else {
+                // den == 0 with nothing clipped means every frame was BORDER-
+                // invalid at this pixel, which happens in the alignment-shift
+                // margin. Those are not blown, and sending them to maxBoost would
+                // paint a white frame around the picture. Fall back to the
+                // reference frame's own sample, normalised the same way.
                 const BracketFrame& f = frames[ref];
-                float lin = static_cast<float>(f.data[static_cast<size_t>(y) * W + x]) - black_at(f, x, y);
-                if (lin < 0) lin = 0;
-                merged = lin;
+                const float raw = static_cast<float>(f.data[static_cast<size_t>(y) * W + x]);
+                const float bl  = black_at(f, x, y);
+                const float wl  = f.white > 0 ? static_cast<float>(f.white)
+                                              : static_cast<float>(refWhite);
+                merged = (wl > bl) ? std::max(0.0f, (raw - bl) / (wl - bl)) : 0.0f;
             }
-            radiance[static_cast<size_t>(y) * W + x] = static_cast<float>(merged);
+            radiance[static_cast<size_t>(y) * W + x] = static_cast<float>(merged * refSpan);
         }
     }
 
@@ -138,29 +178,61 @@ MergeResult merge_raw_bracket(const std::vector<BracketFrame>& frames,
     R.radiance = std::move(radiance);
     R.ref_span = refSpan;
     R.out_white = outWhite;
+    R.dng_scale = dngScale;
+    R.max_boost = maxBoost;
     for (int i = 0; i < 3; ++i) R.neutral[i] = frames[ref].neutral[i];
     R.meta = base_meta;            // static tags (CFA, colour matrices)
     R.meta.width = W; R.meta.height = H; R.meta.stride_bytes = W * 2;
     R.meta.cfa = base_meta.cfa;
-    LOGI("merge ok: %dx%d, %zu frames, refSpan=%.0f outWhite=%.0f", W, H, frames.size(), refSpan, outWhite);
+    LOGI("merge ok: %dx%d, %zu frames, refSpan=%.0f fullSpan=%.0f dngScale=%.4f outWhite=%.0f",
+         W, H, frames.size(), refSpan, fullSpan, dngScale, outWhite);
+    // The develop multiplies radiance by the white-balance gain before the PQ
+    // curve, so the ceiling is hit at boost*gain, not boost alone - on a daylight
+    // frame the red gain is ~2x, which is what actually pushes saturated
+    // highlights to PQ's 10000-nit top. Diagnostic only: the DNG still holds the
+    // full range, and no display comes close to 10000 nits anyway.
+    double maxGain = 1.0;
+    for (int i = 0; i < 3; ++i)
+        if (R.neutral[i] > 1e-6f) maxGain = std::max(maxGain, 1.0 / R.neutral[i]);
+    if (maxBoost * maxGain * cam::kPqScale > 1.0)
+        LOGI("bracket boost %.2fx x wb gain %.2fx reaches %.0f nits - the brightest "
+             "highlights clip at PQ's 10000-nit ceiling in the developed still",
+             maxBoost, maxGain, maxBoost * maxGain * cam::kPqScale * 10000.0);
     return R;
 }
 
-bool write_merged_dng(const MergeResult& r, const std::string& out_path) {
-    if (!r.ok) return false;
-    std::vector<uint16_t> out(static_cast<size_t>(r.W) * r.H);
+void quantize(const MergeResult& r, std::vector<uint16_t>& out, dng::DngMeta& meta_out) {
+    out.resize(static_cast<size_t>(r.W) * r.H);
     const long cap = static_cast<long>(r.out_white);
     for (size_t i = 0; i < out.size(); ++i) {
-        long o = std::lround(r.radiance[i]);
+        long o = std::lround(r.radiance[i] * r.dng_scale);
         if (o < 0) o = 0;
         if (o > cap) o = cap;
         out[i] = static_cast<uint16_t>(o);
     }
-    dng::DngMeta m = r.meta;
-    for (int i = 0; i < 4; ++i) m.black_level[i] = 0.0f;       // black already subtracted
-    m.white_level = static_cast<int>(std::lround(r.out_white));
-    for (int i = 0; i < 3; ++i) m.as_shot_neutral[i] = r.neutral[i];
-    m.has_neutral = true;
+    meta_out = r.meta;
+    for (int i = 0; i < 4; ++i) meta_out.black_level[i] = 0.0f;   // black already subtracted
+    meta_out.white_level = static_cast<int>(std::lround(r.out_white));
+    for (int i = 0; i < 3; ++i) meta_out.as_shot_neutral[i] = r.neutral[i];
+    meta_out.has_neutral = true;
+
+    // The merged plane deliberately keeps `max_boost` stops of headroom above
+    // the reference exposure's clip, so the reference white sits at
+    // out_white/max_boost rather than at out_white. Every developer that treats
+    // WhiteLevel as diffuse white therefore renders this file exactly that many
+    // stops dark — which is why a STATIC frame looked so much dimmer than the
+    // FAST frame of the same scene. BaselineExposure is the tag that says
+    // "open back up by this much"; the raw counts are untouched, so nothing is
+    // lost either way, only how a viewer scales them.
+    const double headroom = r.out_white / std::max(r.ref_span * r.dng_scale, 1.0);
+    meta_out.baseline_exposure = (headroom > 1.0) ? std::log2(headroom) : 0.0;
+}
+
+bool write_merged_dng(const MergeResult& r, const std::string& out_path) {
+    if (!r.ok) return false;
+    std::vector<uint16_t> out;
+    dng::DngMeta m;
+    quantize(r, out, m);
     const bool ok = dng::write_dng(out_path, out.data(), m);
     LOGI("merged DNG %s -> %s", ok ? "ok" : "FAILED", out_path.c_str());
     return ok;

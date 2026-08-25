@@ -22,18 +22,4 @@ bool write_png_yuv420(const std::string& path,
                       int y_stride, int u_stride, int v_stride, int uv_pixel_stride,
                       int orientation_deg);
 
-// Writes 16-bit RGB as a lossless PNG (colour type 2, bit depth 16).
-//
-// stb_image_write cannot do 16-bit, and 8 bits would throw away most of what a
-// RAW frame carries — which is the whole point of saving one. This uses zlib
-// directly, which is also several times faster than stb's deflate (the 8-bit
-// YUV path above takes ~9 s for 12 MP almost entirely inside it).
-//
-// `rgb16` is width*height*3 host-endian samples (PNG stores big-endian; the
-// conversion happens here). `orientation_deg` (0/90/180/270, clockwise to
-// upright) is baked into the pixels, as PNG has no orientation tag.
-bool write_png_rgb16(const std::string& path,
-                     const uint16_t* rgb16, int width, int height,
-                     int orientation_deg);
-
 } // namespace cam

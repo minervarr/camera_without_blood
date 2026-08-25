@@ -48,6 +48,7 @@ git submodule update --init --recursive   # required: CMake builds most libs fro
 - The RAW pipeline emits a per-window profile line (`RawVideo: .. fps | gpu A/MAXms enc-wait B/MAXms cam-gap MAXms ..`) for locating frame-rate stalls.
 - Verify recorded output with `ffprobe` (expect HEVC Main 10, `yuv420p10le`, `bt2020nc/smpte2084/pc` for the RAW PQ path) and play it back on-device.
 - **Gotcha that wasted a lot of time once:** when on-device behavior contradicts the source, first confirm the build actually **compiled and installed**. The native build can fail (a C++ error) while a *prior* APK stays installed, so you end up testing stale code. Verify by grepping logcat for a log string you know is new (`adb logcat -d -s DfNet:* AudioCapture:*`) before debugging the algorithm. From Git Bash, `adb pull`/`shell` of `/storage/...` paths needs `MSYS_NO_PATHCONV=1`.
+- **Injected taps land ~70 px above where the UI sees them:** `input tap` coordinates are in screen space, but the app's touch handler receives them minus the status-bar inset — a tap at screen y=1462 arrives at app y≈1392. Calibrate against a screencap (find the button's pixel rows, inject those screen coords); the shutter's big circle forgives being off, the PHOTO/VIDEO chip does not, and a missed toggle silently leaves the app in the other mode.
 - **Verification devices in use:** a **Galaxy S23 Ultra** (exercises the RAW_PQ path) and a **Motorola moto g06** (no Camera2 RAW → legacy HLG video + the YUV→PNG still path; HEVC encoder caps its video ~1440×1088). Wireless-debug ports change on every reconnect — re-`adb connect <ip:port>` and expect to be handed a new port.
 - **Host-side `.mkv`/audio diagnostics:** `ffmpeg -i clip -af volumedetect -f null -` for audio level (a silent USB-DAC clip is `~-73 dB`); `adb exec-out "dd if=<path> bs=1M count=N"` grabs just a clip's *header* without pulling the whole multi-GB file; `Format-Hex` of the first 64 bytes confirms the EBML `DocType` (see the muxer gotcha under Muxing).
 
@@ -76,7 +77,7 @@ Although the app is a `NativeActivity` driven by C++, the **Camera2 capture sess
 - While recording in legacy mode, Java drives the HEVC encoder and forwards encoded packets back to the native muxer.
 - **Background recording:** the second Java class, `RecordingService.java`, is a `startForeground()` / `START_STICKY` service (`foregroundServiceType="camera|microphone"`) that also holds a `PARTIAL_WAKE_LOCK` ("camera:record"). `HdrCameraSession.startCameraService()/stopCameraService()` bring it up/down as the preview starts/stops, so Android keeps the camera grant and the CPU keeps developing/encoding with the screen off. The `FOREGROUND_SERVICE*` + `WAKE_LOCK` permissions in `AndroidManifest.xml` exist for this.
 
-The native `cpp/camera/` code (`camera.cc`, `dng_writer.cc`, `dng_meta_source.cc`) supplies the static DNG metadata reused by the RAW video ISP and contains a native RAW/DNG still path — but the **live shutter is Java** (`HdrCameraSession.takePhoto`), not `cam::Camera::take_photo`. See **Still photos** below.
+The native `cpp/camera/` code (`camera.cc`, `dng_writer.cc`, `dng_meta_source.cc`) supplies the static DNG metadata reused by the RAW video ISP, and the **live shutter routes natively** through `ndkcam::Session::take_photo` on both RAW and non-RAW devices (Java `HdrCameraSession.takePhoto` remains the fallback for devices the native session can't serve). See **Still photos** below.
 
 ### Lifecycle / ownership
 
@@ -104,7 +105,7 @@ This is why `kNlmSearchRadius` is **1** (8 candidates), not 2, and why both pass
 **The NLM is tiled, and that is load-bearing.** The straightforward version reads `srcBuf` **457 times per output pixel** (24 candidates x (9 patch samples x 2 reads + 1) + 1) — 5.7 billion global loads per frame at 4080x3060, measured at ~350 ms/frame on an Adreno 740 (8 fps, 253 of 299 frames dropped). `nlm_bayer.slang` now stages each group's whole footprint (a 28x20 tile, 2 240 B) in `groupshared` once, already normalized and edge-clamped, so the inner loops are pure LDS reads: **4.4 global loads per pixel**. `debayer_isp.slang` stages a 20x20 Bayer tile the same way (a group develops 16x16 px, Malvar reaches +/-2), replacing 3 328 global loads per group with 400. Two rules keep it that way — the 3x3 centre patch lives in three `float3` registers (it is invariant across all 24 candidates), and `S`/`P` are **compile-time** constants, not push constants: a runtime `P` stops the loops unrolling, makes the patch indices dynamic, and spills it to scratch memory, which costs more than the tiling saves. The `.spv` should contain **no `OpVariable %_ptr_Function__arr`** — check with `spirv-dis` after touching this shader. The NLM output buffer is **per-slot** (`InFlight::denoised_buf`); sharing it forced a full-buffer WAR barrier every frame that serialized the two in-flight slots into no GPU-GPU overlap at all.
 
 A motion-adaptive temporal pass used to exist and was **deleted**: its retention constant had been set to 0, making it a full-resolution no-op that also gated the NLM off, so the "denoised" pipeline was in fact running no denoise at all. Don't reintroduce it — temporal was device-verified to smear handheld motion. The ISP uses its **own Vulkan device**, separate from the rendering one (`vce::gpu::ComputeContext`, aliased as `isp::VkCompute` via `cpp/isp/vk_compute.hh`), and a `kInFlight=2` command-buffer ring overlaps GPU compute with the CPU readback+encode.
-- **`YUV_NATIVE` (native, for devices without RAW):** `ndkcam::Session` + `ndkcam::Encoder` (`cpp/camera/ndk_encoder.{cc,hh}`). The camera writes straight into `AMediaCodec_createInputSurface`'s window, which is a capture target — **no readback, no copy**, the one real virtue of the Java path it replaces. Two things it does better: the recording size is resolved **empirically** (candidates largest-first, the first the codec actually accepts wins) instead of by a `MediaCodecInfo` heuristic — on the moto g06 that is **1920x1440 instead of 1440x1088, 2.35x the pixels** — and the bitrate is driven to the encoder's 30 Mbit/s ceiling instead of 23.5. Where `MANUAL_POST_PROCESSING` exists it also sets a straight-line tonemap curve with NR and edge enhancement off, so the clip is gradeable rather than pre-cooked by the HAL. It does not attempt 10-bit: devices on this path have no dynamic range profile and (on the verified one) no Main10 encoder. **Verified so far:** capability probe, size negotiation, encoder configure + input surface, capture-session creation. **Not yet verified:** an end-to-end recording producing a playable `.mkv` — the test device was locked.
+- **`YUV_NATIVE` (native, for devices without RAW):** `ndkcam::Session` + `ndkcam::Encoder` (`cpp/camera/ndk_encoder.{cc,hh}`). The camera writes straight into `AMediaCodec_createInputSurface`'s window, which is a capture target — **no readback, no copy**, the one real virtue of the Java path it replaces. Two things it does better: the recording size is resolved **empirically** (candidates largest-first, the first the codec actually accepts wins) instead of by a `MediaCodecInfo` heuristic — on the moto g06 that is **1920x1440 instead of 1440x1088, 2.35x the pixels** — and the bitrate is driven to the encoder's 30 Mbit/s ceiling instead of 23.5. Where `MANUAL_POST_PROCESSING` exists it also sets a straight-line tonemap curve with NR and edge enhancement off, so the clip is gradeable rather than pre-cooked by the HAL. It does not attempt 10-bit: devices on this path have no dynamic range profile and (on the verified one) no Main10 encoder. **Device-verified end-to-end on the moto g06:** capability probe, size negotiation, encoder configure + input surface, capture-session creation, and a recorded `.mkv` (HEVC 1920×1440 HLG/bt2020 + FLAC) that `ffprobe` parses and plays; photo↔video mode switches rebuild the session at each REC boundary and stills stay real pixels across them.
 - **`LEGACY_HLG` (Java fallback):** still the fallback whenever the native session reports it cannot serve the device — the Java `HdrCameraSession` HLG10 MediaCodec path. **Beware the name.** On the moto g06 it is not HLG10 at all: the device reports **no dynamic range profiles** (`HLG10 supported: false` in logcat) and its HEVC encoders expose only `ProfileMain`, so the path degrades to 8-bit SDR. The Java-only API the whole Java layer exists for therefore buys nothing on the only device that takes this path. Record/preview aspect comes from the sensor's true active array (`sensorAspect()` ← `SENSOR_INFO_ACTIVE_ARRAY_SIZE`), **not** `getOutputSizes()` max-area: the framework moves sub-30 fps modes to the *high-resolution* list, so on some sensors the largest *full-rate* output is a square and the old max-area heuristic recorded a 1:1 crop.
 
 The RAW_PQ pipeline is **device-verified** on a Galaxy S23 Ultra (SD8g2 / Adreno 740): sustained **30.0 fps / 0 drops** at 4080×3060, HEVC Main10 PQ. Frame rate (30 fps RAW — sensor-locked) and bitrate (~240 Mbps — HEVC L6.x tier ceiling) are **hardware/encoder walls**, not tunables. See `~/.claude/.../memory/raw-pq-pipeline-status.md` for the full optimization history and the items still worth watching (encoder stride bytes-vs-pixels heuristic, sensor-clock BOOTTIME→MONOTONIC rebase, the `wb_valid_` gate).
@@ -115,10 +116,130 @@ The RAW_PQ pipeline is **device-verified** on a Galaxy S23 Ultra (SD8g2 / Adreno
 
 ### Still photos (the shutter)
 
-The **shutter** (`ui::UI::Action::SHUTTER` → `app.cc` → `Recorder::take_photo` → `jni::hdr_take_photo`) routes to **Java `HdrCameraSession.takePhoto`**. Java picks the still stream by an `activeStill` flag set when the session is built:
+The shutter (`ui::UI::Action::SHUTTER` → `app.cc` → `Recorder::take_photo`) routes
+**natively whenever the native session is live** (`ndkcam::Session::take_photo`);
+Java `HdrCameraSession.takePhoto` is now only the fallback for devices the native
+session can't serve:
 
-- **RAW devices → DNG.** A 3-shot exposure-bracketed RAW16 burst; each frame is paired with its capture result by sensor timestamp and written via `nativeOnRawFrame` → `cpp/camera/dng_writer.cc`.
-- **Non-RAW devices → full-res YUV → lossless PNG.** Devices without a Camera2 `RAW` capability capture the largest `YUV_420_888` size and save it losslessly: `onStillImage` copies the planes, then a **dedicated single-thread worker** (with a FIFO output-name queue so bursts don't mislabel) runs `nativeOnStillFrame` → `cpp/camera/still_writer.cc` (vendored `third_party/stb_image_write.h`; BT.601 limited-range YUV→RGB, sensor orientation baked into the pixels, NR/edge **off**). The encode is slow (~9 s for 12 MP — `stb`'s deflate), so it must stay off the camera reader thread; the worker is `shutdown()`-ed (not killed) on stop so queued shots still flush.
+- **RAW devices → DNG only.** A 3-shot exposure-bracketed RAW16 burst; each frame is paired with its capture result by sensor timestamp and written via `nativeOnRawFrame` → `cpp/camera/dng_writer.cc`. The bracket is merged by `cpp/camera/hdr_merge.cc` (see **HDR stills** below). **No viewable copy is written** — see **Capture-only** below.
+- **Non-RAW devices (native path) → full-res YUV → lossless PNG.** `pick_camera()` also picks the largest `AIMAGE_FORMAT_YUV_420_888` size; the idle session is preview + still (the encoder surface joins only at REC — see **Two video pipelines**). `Session::take_photo` queues the output name and fires a one-shot `TEMPLATE_STILL_CAPTURE` at the still target with NR/edge off; `on_still_image` copies the planes synchronously and a **worker thread** encodes via `cam::write_png_yuv420` (8-bit sRGB, orientation baked in, lossless) and registers the file. On these devices that PNG **is** the capture — there is no DNG behind it — so it must be lossless *and* openable everywhere, which JXL is not.
+- **Non-RAW devices (Java fallback) → full-res YUV → lossless PNG** (unchanged): `onStillImage` copies the planes into a FIFO-name worker → `cam::write_png_yuv420` (~9 s for 12 MP).
+
+**Gralloc-usage gotcha that black-filled every native still (device-verified on
+the moto g06 / MTK P1):** the still reader must be created with
+`AImageReader_newWithUsage(..., AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, ...)`.
+With usage 0 the capture session configures fine, frames are *delivered*, and
+the buffers contain **zero-filled gralloc memory** — no error anywhere. The
+framework's `ImageReader` always allocates YUV consumers with CPU-read usage,
+which is why only the Java path ever produced pixels. Bisected clean: preview
+size, request extras, templates, and an "arming" pre-shot all make no
+difference; the usage bits alone are the fix.
+
+### Capture-only: the DNG is the deliverable
+
+**Nothing viewable is written next to a DNG.** Developing, denoising and rendering
+happen in a **post app** (ViewMage, extended to read DNGs) — the camera's job ends
+at the sensor data. A `.jxl` used to be developed alongside every still; it was a
+second, lossier copy of what the DNG already holds, and Android cannot decode JXL
+anyway (verified: the platform media scanner reports `width=NULL` for a `.jxl`
+while reading an `.avif` fine), so it was not viewable on the device that shot it.
+
+| photo mode | output |
+|---|---|
+| 0 FAST | 1 DNG |
+| 1 STATIC | 1 merged DNG |
+| 2 STATIC + RAW set | 3 source DNGs + 1 merged DNG |
+
+**`libjxl` is gone from the build** along with it — with no caller left it was
+linking ~47 MB (debug) of encoder plus its vendored highway/brotli/lcms into
+every build. Removing it took the debug APK from **113.6 MB to 66.3 MB** and
+`libcamera_recorder.so` from **63.1 MB to 15.8 MB**. If it ever returns, mind the
+trap it left: AGP's debug variant leaves `CMAKE_*_FLAGS_DEBUG` at `-g` with no
+`-O`, so an `add_subdirectory` dependency inherits `-O0` while `camera_recorder`'s
+own `target_compile_options` keep it at `-O2` — libjxl+highway at `-O0` encoded a
+12 MP still ~20x slower, minutes instead of seconds. Suspect this for any future
+`add_subdirectory` dependency that seems inexplicably slow.
+
+**`NoiseProfile` (DNG tag 51041) is written on every RAW still.** One (S, O) pair
+per CFA channel from `ACAMERA_SENSOR_NOISE_PROFILE`, latched off each capture
+*result* (`ndk_session.cc` — it tracks the ISO actually used, so it is not a
+static characteristic) and emitted by `tiny_dng_writer.h`'s `SetNoiseProfile` as
+`TIFF_DOUBLE`. Variance at normalised signal `x` is `S*x + O`: the Poisson shot
+term scales with signal, the Gaussian read term does not. It has to be DOUBLE —
+`O` is order 1e-6 and a rational would quantise it to zero.
+
+This tag is what lets post denoise *correctly* instead of estimating the noise
+level from the pixels. It matters most for a learned denoiser: told the wrong
+noise level, a model either smears real detail away or synthesises texture the
+scene never had. It is also the piece that makes **one model work across phones** —
+the raw-domain equivalent of Whisper's log-mel front-end (normalise by black/white
+level, canonicalise the CFA order, and *tell the model the noise level*), without
+which a model trained on one sensor's 14-bit RGGB produces confident nonsense on
+another's 10-bit GBRG.
+
+### Still develop (`cpp/camera/raw_develop.cc`) — scene-referred, no tone curve
+
+The develop applies exactly four things: black subtract, white balance, the CCM,
+and the transfer curve. **There is no tone curve and no rendering intent** — the
+output is scene-referred, which is why a still looks flat and "washed" next to a
+stock-camera JPEG. That is correct for an archival/post pipeline and wrong for a
+finished picture; the display rendering belongs in the post app.
+
+Two measured properties of the current develop, both on a real S23 Ultra shot:
+
+- **There is NO black-level pedestal, and the measurement that appeared to show
+  one was wrong.** The claim was that the darkest 32x32 *blocks* of a frame mean
+  **64.56–65.18** against a declared `BlackLevel` of 64, i.e. black never reaches
+  zero. That number is real but measures the *picture*, not the sensor: a block
+  mean averages the noise away and so reports the local **signal** level, and the
+  darkest region of a normally-lit scene is not pure black. The statistic that
+  answers the question is the **whole-frame low percentile**, and on two real S23
+  Ultra frames it lands at or *below* the declared black — 63.0 (bright scene) and
+  57.0 (night scene), with raw minima of 43 and 42. Noise straddles the declared
+  black in both, so the black level is correct and there is nothing to subtract.
+  An auto black point was written for this and **removed**; don't re-add it
+  without a whole-frame measurement that actually shows a floor above black.
+  What makes blacks *look* lifted is the missing display tone curve (below).
+- **Beware measuring shadow tint by ranking pixels on luminance.** Luminance is
+  68% green, so selecting the darkest individual pixels preferentially picks ones
+  where green noise was low, which inflates B:G by construction. That method
+  reported B:G = 2.23 in the deep shadows; selecting by **spatial block mean**
+  instead gives **1.43** (midtones 0.99). Always select dark regions spatially.
+
+**Nit mapping.** Linear 1.0 (the reference exposure's clip point) → **1000 nits**,
+via `cam::kPqScale` in `raw_develop.hh`, deliberately the same constant as the
+video ISP's `RawVideoPipeline::kPqScale` so a still and a clip of the same scene
+match. **Changing `kPqScale` invalidates the absolute levels of every file already
+shot.**
+
+**`hdr_merge` quantization.** `outWhite` used to be `min(65535, refSpan*maxBoost)` — a
+clamp that silently discarded headroom on wide brackets. It now scales to fit, with
+`MergeResult::dng_scale` carried so the quantization and the DNG agree. On the S23
+Ultra's **10-bit** sensor (`white=1023`, `refSpan≈959`, ±2 EV → `fullSpan≈3836`)
+`dng_scale` stays 1.0. `BaselineExposure` (50730) is emitted as `log2(maxBoost)`:
+the merged plane keeps that many stops of headroom above the reference clip, so
+without the tag every compliant developer renders the file exactly that many stops
+dark — which is what made STATIC look dimmer than FAST.
+
+**`hdr_merge` clipped-everywhere fallback.** A pixel clipped in *every* bracket
+frame is at or above the brightest frame's ceiling, so it falls back to
+`maxBoost` (the top of the merged range). It used to fall back to the *reference*
+frame's value (~1.0) while a neighbour with even one valid frame was boosted to
+`maxBoost` — a `maxBoost`-fold step at the edge of every blown highlight, per
+channel. It also sat below the develop's highlight-reconstruction knee
+(`0.95*maxBoost`), so that reconstruction never once fired for STATIC.
+**Border-invalid pixels are a separate case** (`any_clipped` distinguishes them):
+every frame out of range in the alignment-shift margin is *not* blown, and
+sending those to `maxBoost` paints a white frame around the picture.
+
+**The NR chip is hidden on the RAW path.** `ACAMERA_NOISE_REDUCTION_MODE` is a
+control over the HAL's ISP stage, and RAW16 is by Camera2's definition the sensor
+data from *before* that stage — so on a RAW device the chip cannot affect the DNG
+whatever it is set to. It used to be drawn regardless (the old comment in `ui.hh`
+even said "inert on RAW devices — the chip is drawn regardless"), which put a dead
+control on screen on exactly the devices this app targets. `app.cc` now gates it
+on `video_mode() != RAW_PQ`. It still does real work on the non-RAW path, which is
+why it exists at all.
 
 **PHOTO vs VIDEO is a session split** on the legacy/non-raw path: `preview + still` in PHOTO mode vs `preview + encoder` in VIDEO mode (`setPhotoMode` recreates the session on the UI toggle) — never preview+encoder+still together (not a guaranteed stream combo). RAW-video devices are unaffected (their session is preview+RAW16, and stills come from the same RAW stream).
 
@@ -135,7 +256,7 @@ The **shutter** (`ui::UI::Action::SHUTTER` → `app.cc` → `Recorder::take_phot
 Libraries are organized into `libs/firstparty/` (minervarr repos) and `libs/thirdparty/` (external dependencies):
 
 - **First-party submodules** (`libs/firstparty/`): `Vk_Canvas_Lb_LAW` (canvas + font engine, bundles FreeType + msdfgen), `archive_engine`, `audio_engine`, `regen_atlas`.
-- **Third-party submodules** (`libs/thirdparty/`): `libebml`, `libmatroska`, `flac`. `libusb` comes via `audio_engine`'s `usb_audio.cpp`. `ncnn` and `rnnoise` are still checked out as submodules but **neither is built or linked** (ncnn went out with `AiDenoiser`).
+- **Third-party submodules** (`libs/thirdparty/`): `libebml`, `libmatroska`, `flac`. `libusb` comes via `audio_engine`'s `usb_audio.cpp`. `libjxl`, `ncnn` and `rnnoise` are still checked out as submodules but **none is built or linked** — `ncnn` went out with `AiDenoiser`, `libjxl` when stills became DNG-only (see **Capture-only**).
 - **Vendored source (not submodules), also built by CMake:** `libs/thirdparty/kiss_fft` and `libs/thirdparty/soxr` (`CMakeLists.txt` ~lines 23–40).
 - **Removed:** `cpp/camera/camera.cc/.hh` (`cam::Camera`) was a complete 495-line NDK Camera2 implementation that `Recorder` constructed and **never called**. `cpp/camera/ndk_session.{cc,hh}` supersedes it. The `cam` namespace still exists for `still_writer.cc` (`cam::write_png_yuv420`).
 - **Prebuilt import (not compiled):** `libs/thirdparty/onnxruntime` — an `IMPORTED` `.so` per ABI (`CMakeLists.txt` ~lines 43–48).

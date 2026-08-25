@@ -51,5 +51,8 @@ public class DemoLauncherActivity extends Activity {
         String[] files = CameraLauncher.parseResult(resultCode, data);
         Toast.makeText(this, "Captured " + files.length + " file(s)", Toast.LENGTH_LONG).show();
         for (String f : files) Log.i(TAG, "result file: " + f);
+        // This host has no UI of its own: don't leave an empty white window
+        // behind the camera scene — leaving the camera leaves the app.
+        finish();
     }
 }

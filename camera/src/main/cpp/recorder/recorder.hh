@@ -66,6 +66,38 @@ public:
     // Read at shot time (FAST fires 1 shot, STATIC fires 3).
     void set_photo_output_mode(int m) { photo_output_mode_.store(m); }
 
+    // Still-capture noise reduction (non-RAW devices: the HAL's NR on the
+    // full-res YUV still). Default OFF. Remembered here so it survives the
+    // session rebuilds a PHOTO/VIDEO toggle causes.
+    void set_still_nr(bool on);
+
+    // ── Manual focus ────────────────────────────────────────────────────────
+    // Only the native session honours these; on the Java fallback the control
+    // is hidden (manual_focus_available() reports false there).
+    bool  manual_focus_available() const;
+    float max_focus_diopters()     const;
+    // `diopters` is 1/m: 0 = infinity, max_focus_diopters() = the closest the
+    // lens reaches. Remembered here so it survives the session rebuilds a
+    // PHOTO/VIDEO toggle and a REC boundary cause.
+    void  set_focus(bool manual, float diopters);
+    // Where autofocus has actually left the lens (diopters), for arming MF.
+    float reported_focus_diopters() const;
+    bool  focus_manual()   const { return focus_manual_.load(); }
+    float focus_diopters() const { return focus_diopters_.load(); }
+
+    // ── Focus-check loupe ───────────────────────────────────────────────────
+    // Raises the preview stream so a magnified inset shows real sensor detail.
+    // Refused while recording or finalizing (it reconfigures the session).
+    bool loupe_available() const;
+    bool set_loupe(bool on);
+    // The largest magnification the high-resolution preview actually backs with
+    // real pixels, given how wide the frame is drawn on screen. Callers use it
+    // to stop offering a zoom that would only upscale.
+    int  loupe_max_factor() const;
+    // Display width the preview is drawn at, needed for the ratio above. Set by
+    // App when the renderer's surface size is known.
+    void set_display_width(int px) { display_w_ = px > 0 ? px : 1; }
+
     // Re-point (or detach) the renderer that camera frames composite into.
     // Safe to call while recording: the camera keeps running across renderer
     // recreation (e.g. surface destroyed/recreated on rotate or lifecycle churn).
@@ -119,6 +151,10 @@ private:
     // Native NDK capture session, used for the RAW path when the device can
     // serve it (see start_preview). Null means the Java session is driving.
     std::unique_ptr<ndkcam::Session>  ndk_session_;
+    std::atomic<bool>                 still_nr_{false};
+    std::atomic<bool>                 focus_manual_{false};
+    std::atomic<float>                focus_diopters_{0.0f};
+    std::atomic<int>                  display_w_{1080};
     bool                              use_ndk_ = false;
     jni::RawSink                      pending_raw_sink_{};
     jni::RawVideoSink                 pending_raw_video_sink_{};
@@ -178,6 +214,14 @@ private:
     // The worker is a single long-lived consumer of bracket_jobs_ — it both keeps
     // bursts serialized and keeps the camera thread from ever blocking on a
     // merge in progress (a plain join() there stalled capture for hundreds of ms).
+    // Develops a linear Bayer plane and writes the BT.2020/PQ JXL viewable copy.
+    // `lin` is black-subtracted, stride == width, normalised so 1.0 is the
+    // reference exposure's clip point; values above 1.0 are recovered highlights.
+    // Synchronous — call it from code already running on bracket_worker_.
+    // `clip_level` is where the source saturated, in `lin`'s units: 1.0 for a
+    // single shot, a merged bracket's max_boost for the merge. It drives the
+    // highlight reconstruction in cam::develop_linear_bayer.
+
     void bracket_worker_loop();
     void enqueue_bracket_job(std::function<void()> job);
     void stop_bracket_worker();

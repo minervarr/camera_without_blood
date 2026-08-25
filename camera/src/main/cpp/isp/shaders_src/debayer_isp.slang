@@ -196,8 +196,27 @@ float3 pq_encode(float3 L) {
 float3 develop(int x, int y, bool hq) {
     float3 cam = hq ? demosaic_hq(x, y) : demosaic_malvar(x, y);
 
-    // White balance in sensor space (gains are 1/neutral, so grey maps to grey).
+    // Highlight reconstruction, BEFORE white balance is allowed to tint what a
+    // saturated photosite could not measure. read_raw() normalises to 1.0 at the
+    // sensor's white level, so a channel at ~1.0 is pinned and carries no
+    // information beyond "at least this bright". White-balancing it anyway tints
+    // every blown highlight by whichever channel clipped first — green saturates
+    // earliest on these sensors and red/blue carry ~1.9x gains, which turns
+    // strong light green at the fringes and magenta in the core.
+    //
+    // Each clipped channel is raised to the brightest balanced channel, ramped in
+    // over the last 5% before the clip so there is no seam. Unclipped channels are
+    // untouched, so a genuinely saturated colour keeps its hue; channels only ever
+    // rise, so nothing darkens. Kept in lockstep with cam::develop_linear_bayer in
+    // camera/raw_develop.cc so a still and a clip of the same scene still agree.
+    const float3 pre = cam;
     cam *= push.wb.xyz;
+    {
+        const float knee = 0.95f;
+        const float peak = max(max(cam.r, cam.g), cam.b);
+        const float3 t   = smoothstep(knee.xxx, 1.0f.xxx, pre);
+        cam += (peak.xxx - cam) * t;
+    }
 
     // Sensor primaries -> BT.2020 linear.
     float3 lin;

@@ -9,6 +9,7 @@
 #include "jni/jni_camera.hh"
 #include "archive.hh"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <chrono>
@@ -221,6 +222,12 @@ void App::onLButtonDown(int x, int y) {
                 std::string vdir = base + "/video";
                 archive::ensure_dir(vdir);
                 std::string out_path = vdir + "/VID_" + ts + ".mkv";
+                // The loupe is a framing aid, not a recording mode: its 4K
+                // preview stream would eat into the RAW path's 33 ms frame
+                // budget, so REC always closes it first.
+                if (ui_loupe_factor_ != 0 && recorder_->set_loupe(false)) {
+                    set_loupe_factor(0);
+                }
                 recorder_->start_saving(out_path);
                 jni::session_record_file(out_path);
             }
@@ -239,8 +246,89 @@ void App::onLButtonDown(int x, int y) {
     } else if (act == ui::UI::Action::CYCLE_PHOTO_MODE) {
         ui_photo_mode_ = (ui_photo_mode_ + 1) % 3;
         recorder_->set_photo_output_mode(ui_photo_mode_);
-        ui_->set_photo_mode_index(ui_photo_mode_);
+    } else if (act == ui::UI::Action::TOGGLE_STILL_NR) {
+        ui_still_nr_ = !ui_still_nr_;
+        recorder_->set_still_nr(ui_still_nr_);
+    } else if (act == ui::UI::Action::TOGGLE_FOCUS_MODE) {
+        ui_focus_manual_ = !ui_focus_manual_;
+        if (ui_focus_manual_) {
+            // Start from where autofocus already put the lens, so the first
+            // drag nudges a focused image instead of snapping to infinity.
+            const float af = recorder_->reported_focus_diopters();
+            if (af > 0.0f) ui_focus_d_ = af;
+        }
+        recorder_->set_focus(ui_focus_manual_, ui_focus_d_);
+    } else if (act == ui::UI::Action::CYCLE_PEAKING) {
+        ui_peak_level_ = (ui_peak_level_ + 1) % 3;
+        apply_peaking();
+    } else if (act == ui::UI::Action::CYCLE_LOUPE) {
+        // Cycle off -> x2 -> x4 -> off, but skip any step the preview stream
+        // cannot actually resolve: magnifying past the real pixels would show
+        // an upscaled image while implying it is sensor detail, which is worse
+        // than not offering it at all when the whole point is judging focus.
+        const int cap  = recorder_->loupe_max_factor();
+        const int next = (ui_loupe_factor_ == 0) ? 2
+                       : (ui_loupe_factor_ == 2 && cap >= 4) ? 4 : 0;
+        // Only crossing the off boundary touches the camera: x2 -> x4 is a
+        // magnification change on a preview stream that is already high-res.
+        // A refused reconfigure (wrong state) leaves the UI where it was.
+        const bool crosses_off = (ui_loupe_factor_ == 0) != (next == 0);
+        if (!crosses_off || recorder_->set_loupe(next != 0)) {
+            set_loupe_factor(next);
+        }
     }
+}
+
+void App::apply_peaking() {
+    if (!renderer_) return;
+    // Luma gradient per texel. Tuned on the verified devices: 0.10 marks only
+    // genuinely crisp edges, 0.05 also catches soft ones (useful wide open or
+    // in low light, at the cost of some noise lighting up).
+    const float thresh = (ui_peak_level_ == 1) ? 0.10f
+                       : (ui_peak_level_ == 2) ? 0.05f : 0.0f;
+    renderer_->set_camera_peaking(thresh, /*green=*/false);
+}
+
+void App::set_loupe_factor(int factor) {
+    ui_loupe_factor_ = factor;
+    if (renderer_) renderer_->set_camera_loupe(factor ? (float)factor : 1.0f);
+}
+
+void App::onMouseWheel(int x, int y, int delta) {
+    if (!ui_ || !recorder_ || !ui_focus_manual_) return;
+
+    const float max_d = recorder_->max_focus_diopters();
+    if (max_d <= 0.0f) return;
+
+    // The shell hands us the finger's displacement in wheel units, one per
+    // pixel. A drag spanning 60% of the surface covers the lens's whole range,
+    // measured against the actual surface rather than a hardcoded pixel count —
+    // the two verified devices are 1570 and 2963 px tall, so a constant would
+    // mean two very different gestures. Dragging down pulls focus in.
+    const float span = std::max(1.0f, (renderer_ ? (float)renderer_->height() : 1600.0f) * 0.6f);
+    ui_focus_d_ += (float)delta * (max_d / span);
+    if (ui_focus_d_ < 0.0f)   ui_focus_d_ = 0.0f;
+    if (ui_focus_d_ > max_d)  ui_focus_d_ = max_d;
+
+    // Re-submitting the repeating request at touch-event rate would flood the
+    // HAL for no visible gain; the lens cannot move faster than this anyway.
+    const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - last_focus_push_ns_ >= 33'000'000) {
+        last_focus_push_ns_ = now;
+        recorder_->set_focus(true, ui_focus_d_);
+    }
+    ui_repaint_frames_ = 4;
+}
+
+void App::onDragEnd(int, int) {
+    // The throttle in onMouseWheel drops whatever arrives in its last window,
+    // so a stroke that ends within 33 ms of the previous push would leave the
+    // lens short of what the readout claims. Push the final value unthrottled.
+    if (!recorder_ || !ui_focus_manual_) return;
+    last_focus_push_ns_ = 0;
+    recorder_->set_focus(true, ui_focus_d_);
+    ui_repaint_frames_ = 4;
 }
 
 void App::onNavBack() {
@@ -283,8 +371,10 @@ void App::init_vulkan() {
         }
         ui_->set_video_mode(vm);
     }
-    ui_->set_photo_mode_ui_enabled(ui_photo_mode_ui_enabled_);
-    ui_->set_photo_mode_index(ui_photo_mode_);
+    // Chip state is pushed every frame by draw_frame(); only the renderer needs
+    // catching up here, because it is the object that was just recreated.
+    if (renderer_) renderer_->set_camera_loupe(ui_loupe_factor_ ? (float)ui_loupe_factor_ : 1.0f);
+    apply_peaking();
     LOGI("Renderer/UI initialized");
 
     // If the camera is already running (renderer was recreated), re-point it at
@@ -368,6 +458,31 @@ void App::destroy_recorder() {
 void App::draw_frame() {
     // Rebuild the overlay geometry from scratch each frame.
     canvas_data_.clear();
-    if (recorder_) ui_->update(*recorder_);
+    if (recorder_) {
+        // The UI is a pure view of App's state: everything it draws is pushed
+        // here, once per frame. An earlier version mirrored each flag from its
+        // own tap handler and TOGGLE_FOCUS_MODE forgot to — the camera changed
+        // mode while the chip kept reading "AF", which is indistinguishable
+        // from a dead button. Nothing below may be moved back into a handler.
+        ui_->set_focus_available(recorder_->manual_focus_available());
+        ui_->set_focus_manual(ui_focus_manual_);
+        ui_->set_focus_value(ui_focus_d_, recorder_->max_focus_diopters());
+        ui_->set_loupe_available(recorder_->loupe_available());
+        ui_->set_loupe_factor(ui_loupe_factor_);
+        recorder_->set_display_width(renderer_ ? (int)renderer_->width() : 1080);
+        ui_->set_loupe_max_factor(recorder_->loupe_max_factor());
+        ui_->set_loupe_locked(recorder_->state() != rec::State::PREVIEW);
+        float lr[4];
+        if (renderer_ && renderer_->camera_loupe_rect(lr)) ui_->set_loupe_rect(lr[0], lr[1], lr[2], lr[3]);
+        else                                               ui_->set_loupe_rect(0, 0, 0, 0);
+        ui_->set_peak_level(ui_peak_level_);
+        ui_->set_still_nr_enabled(ui_still_nr_);
+        // Hide the NR chip wherever it cannot bite: on the RAW path the shutter
+        // fires a RAW16 bracket, which is sampled before the HAL's NR stage.
+        ui_->set_still_nr_ui_enabled(recorder_->video_mode() != rec::VideoMode::RAW_PQ);
+        ui_->set_photo_mode_index(ui_photo_mode_);
+        ui_->set_photo_mode_ui_enabled(ui_photo_mode_ui_enabled_);
+        ui_->update(*recorder_);
+    }
     renderer_->draw(canvas_data_, 0);
 }

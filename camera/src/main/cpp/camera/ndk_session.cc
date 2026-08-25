@@ -1,9 +1,11 @@
 #include "ndk_session.hh"
 
 #include "../logger.hh"
+#include "still_writer.hh"
 
 #include <android/hardware_buffer.h>
 
+#include <chrono>
 #include <algorithm>
 #include <cstring>
 
@@ -14,6 +16,9 @@ constexpr int kPreviewBuffers = 4;
 // The ISP consumes frames slower than the sensor produces them, so the reader
 // needs enough depth to absorb a burst without the HAL stalling the stream.
 constexpr int kRawBuffers     = 6;
+// One-shot still requests only need one in flight, but a couple spare keep the
+// HAL from stalling if two shutters land back to back.
+constexpr int kStillBuffers   = 3;
 
 struct StreamSize { int32_t w, h; };
 
@@ -128,6 +133,43 @@ bool Session::pick_camera() {
                 }
                 if (prev_w_ == 0) { prev_w_ = 1280; prev_h_ = 720; }
 
+                // The loupe's source: the LARGEST PRIVATE output at the same
+                // aspect, uncapped. Magnifying the 1080p preview would only
+                // upscale it — the extra pixels have to come from the sensor,
+                // and this stream is alive only while the loupe is open (never
+                // during a recording), so the usual bandwidth argument for
+                // keeping the preview small does not apply to it. An earlier
+                // 2160-line cap looked harmless and was not: on the S23 the
+                // 4:3 PRIVATE sizes step 1920x1440 -> 4000x3000, so the cap
+                // threw away the only size that made the loupe worth having.
+                int64_t hi_area = 0;
+                for (const auto& s : output_sizes(meta, AIMAGE_FORMAT_PRIVATE)) {
+                    const float ar = float(s.w) / float(s.h);
+                    if (std::abs(ar - want) > 0.05f) continue;
+                    const int64_t area = int64_t(s.w) * s.h;
+                    if (area > hi_area) { hi_area = area; prev_hi_w_ = s.w; prev_hi_h_ = s.h; }
+                }
+
+                // Manual focus needs both a lens that moves and an AF mode the
+                // HAL lets us switch off. A fixed-focus module reports a
+                // minimum focus distance of 0 (== infinity), which is the
+                // documented "this lens cannot focus" signal.
+                ACameraMetadata_const_entry fd{};
+                if (ACameraMetadata_getConstEntry(
+                        meta, ACAMERA_LENS_INFO_MINIMUM_FOCUS_DISTANCE, &fd) == ACAMERA_OK &&
+                    fd.count > 0) {
+                    max_diopters_ = fd.data.f[0];
+                }
+                ACameraMetadata_const_entry af{};
+                if (ACameraMetadata_getConstEntry(
+                        meta, ACAMERA_CONTROL_AF_AVAILABLE_MODES, &af) == ACAMERA_OK) {
+                    for (uint32_t k = 0; k < af.count; ++k)
+                        if (af.data.u8[k] == ACAMERA_CONTROL_AF_MODE_OFF) af_off_ok_ = true;
+                }
+                LOGI("ndk: manual focus %s (max %.2f diopters, AF_OFF %d), loupe %dx%d",
+                     (af_off_ok_ && max_diopters_ > 0.0f) ? "available" : "unavailable",
+                     max_diopters_, (int)af_off_ok_, prev_hi_w_, prev_hi_h_);
+
                 pick_fps_range(meta, fps_min_, fps_max_);
                 camera_id_ = ids->cameraIds[i];
                 found = true;
@@ -137,6 +179,33 @@ bool Session::pick_camera() {
                 // off) — the concrete image-quality win over the Java path.
                 has_manual_post_ = has_capability(
                     meta, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING);
+
+                // Stills are the opposite of clips: they want the HAL's best
+                // in-silicon noise reduction, not the flat raw look. HIGH_
+                // QUALITY is optional per device, so fall back through what
+                // the HAL actually advertises.
+                still_nr_     = ACAMERA_NOISE_REDUCTION_MODE_FAST;
+                still_nr_off_ = ACAMERA_NOISE_REDUCTION_MODE_FAST;
+                still_edge_ = ACAMERA_EDGE_MODE_FAST;
+                ACameraMetadata_const_entry nm{};
+                if (ACameraMetadata_getConstEntry(
+                        meta, ACAMERA_NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES,
+                        &nm) == ACAMERA_OK) {
+                    for (uint32_t k = 0; k < nm.count; ++k) {
+                        if (nm.data.u8[k] == ACAMERA_NOISE_REDUCTION_MODE_HIGH_QUALITY)
+                            still_nr_ = ACAMERA_NOISE_REDUCTION_MODE_HIGH_QUALITY;
+                        // OFF is optional too; without it FAST is the floor.
+                        if (nm.data.u8[k] == ACAMERA_NOISE_REDUCTION_MODE_OFF)
+                            still_nr_off_ = ACAMERA_NOISE_REDUCTION_MODE_OFF;
+                    }
+                }
+                LOGI("ndk: still NR modes: on=%u off=%u", still_nr_, still_nr_off_);
+                if (ACameraMetadata_getConstEntry(
+                        meta, ACAMERA_EDGE_AVAILABLE_EDGE_MODES, &nm) == ACAMERA_OK) {
+                    for (uint32_t k = 0; k < nm.count; ++k)
+                        if (nm.data.u8[k] == ACAMERA_EDGE_MODE_HIGH_QUALITY)
+                            still_edge_ = ACAMERA_EDGE_MODE_HIGH_QUALITY;
+                }
 
                 // Video candidates, largest first, at the sensor's aspect. The
                 // encoder decides which is real (see Encoder::configure): a
@@ -152,6 +221,18 @@ bool Session::pick_camera() {
                           [](const Encoder::Size& a, const Encoder::Size& b) {
                               return int64_t(a.w) * a.h > int64_t(b.w) * b.h;
                           });
+
+                // Still candidates: the largest full-resolution YUV_420_888
+                // output, same pick the retired Java still path made.
+                int64_t best_still = 0;
+                for (const auto& s : output_sizes(meta, AIMAGE_FORMAT_YUV_420_888)) {
+                    const int64_t area = int64_t(s.w) * s.h;
+                    if (area > best_still) { best_still = area; still_w_ = s.w; still_h_ = s.h; }
+                }
+                ACameraMetadata_const_entry so{};
+                if (ACameraMetadata_getConstEntry(meta, ACAMERA_SENSOR_ORIENTATION, &so)
+                        == ACAMERA_OK && so.count >= 1)
+                    sensor_orientation_ = so.data.i32[0];
 
                 // Reuse the DNG metadata gatherer's tag set by filling here.
                 ACameraMetadata_const_entry q{};
@@ -177,8 +258,10 @@ bool Session::pick_camera() {
         LOGI("ndk: camera %s  RAW16 %dx%d  preview %dx%d  fps [%d,%d]",
              camera_id_.c_str(), raw_w_, raw_h_, prev_w_, prev_h_, fps_min_, fps_max_);
     } else {
-        LOGI("ndk: camera %s  no RAW  preview %dx%d  fps [%d,%d]  manual-post=%d  %zu video sizes",
-             camera_id_.c_str(), prev_w_, prev_h_, fps_min_, fps_max_,
+        LOGI("ndk: camera %s  no RAW  preview %dx%d  still YUV %dx%d (orient %d)  "
+             "fps [%d,%d]  manual-post=%d  %zu video sizes",
+             camera_id_.c_str(), prev_w_, prev_h_, still_w_, still_h_,
+             sensor_orientation_, fps_min_, fps_max_,
              int(has_manual_post_), video_sizes_.size());
     }
     return true;
@@ -210,61 +293,131 @@ bool Session::init(jni::PreviewSink preview, jni::RawSink raw, jni::RawVideoSink
         return false;
     }
 
-    if (!configure_session()) { shutdown(); return false; }
+    // Non-RAW video path: resolve the encoder size and create its input surface
+    // once, up front. Recording only swaps it INTO the session (see start_-
+    // recording); photo mode swaps it out again.
+    if (raw_w_ == 0) {
+        if (video_sizes_.empty()) {
+            LOGI("ndk: no video sizes at the sensor aspect");
+            shutdown();
+            return false;
+        }
+        const int32_t fps = fps_max_ > 0 ? fps_max_ : 30;
+        if (!encoder_.configure(video_sizes_.data(),
+                                static_cast<int>(video_sizes_.size()), fps, record_sink_)) {
+            shutdown();
+            return false;
+        }
+        video_available_ = true;
+    }
+
+    if (!configure_session(/*with_video=*/false)) { shutdown(); return false; }
     available_ = true;
+    if (still_target_) still_worker_ = std::thread(&Session::still_worker_loop, this);
     return true;
 }
 
-bool Session::configure_session() {
+bool Session::configure_session(const bool with_video) {
+    if (!device_) return false;
+
+    // Close any previous capture session first, and WAIT for it: the readers
+    // below outlive most rebuilds, but the loupe's size change deletes the
+    // preview one, and freeing a consumer the HAL is still queueing into is
+    // what produced a second of "Failed to queue buffer to client" and a long
+    // preview blink.
+    close_session_and_wait();
+    if (outputs_) { ACaptureSessionOutputContainer_free(outputs_); outputs_ = nullptr; }
+    if (preview_target_) { ACameraOutputTarget_free(preview_target_);   preview_target_ = nullptr; }
+    if (raw_target_)     { ACameraOutputTarget_free(raw_target_);       raw_target_ = nullptr; }
+    if (video_target_)   { ACameraOutputTarget_free(video_target_);     video_target_ = nullptr; }
+    if (still_target_)   { ACameraOutputTarget_free(still_target_);     still_target_ = nullptr; }
+    if (preview_output_) { ACaptureSessionOutput_free(preview_output_); preview_output_ = nullptr; }
+    if (raw_output_)     { ACaptureSessionOutput_free(raw_output_);     raw_output_ = nullptr; }
+    if (video_output_)   { ACaptureSessionOutput_free(video_output_);   video_output_ = nullptr; }
+    if (still_output_)   { ACaptureSessionOutput_free(still_output_);   still_output_ = nullptr; }
+
     // Preview: PRIVATE + GPU_SAMPLED so the AHardwareBuffer imports straight
-    // into the Vulkan renderer with no copy.
-    if (AImageReader_newWithUsage(prev_w_, prev_h_, AIMAGE_FORMAT_PRIVATE,
+    // into the Vulkan renderer with no copy. The loupe raises the size so the
+    // magnified inset has real pixels; the reader is rebuilt only when the
+    // wanted size actually differs from the live one (it normally survives
+    // every session rebuild, and recreating it costs a buffer round trip).
+    const int32_t want_w = (loupe_on_ && prev_hi_w_ > 0) ? prev_hi_w_ : prev_w_;
+    const int32_t want_h = (loupe_on_ && prev_hi_h_ > 0) ? prev_hi_h_ : prev_h_;
+    if (preview_reader_ && (want_w != prev_live_w_ || want_h != prev_live_h_)) {
+        AImageReader_setImageListener(preview_reader_, nullptr);
+        AImageReader_delete(preview_reader_);
+        preview_reader_ = nullptr;
+        preview_window_ = nullptr;   // owned by the reader we just deleted
+    }
+    if (!preview_reader_ &&
+        AImageReader_newWithUsage(want_w, want_h, AIMAGE_FORMAT_PRIVATE,
                                   AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
                                   kPreviewBuffers, &preview_reader_) != AMEDIA_OK) {
-        LOGE("ndk: preview AImageReader failed");
+        LOGE("ndk: preview AImageReader failed (%dx%d)", want_w, want_h);
         return false;
     }
+    prev_live_w_ = want_w;
+    prev_live_h_ = want_h;
     preview_listener_ = { this, on_preview_image };
     AImageReader_setImageListener(preview_reader_, &preview_listener_);
     if (AImageReader_getWindow(preview_reader_, &preview_window_) != AMEDIA_OK) return false;
 
     const bool raw_path = raw_w_ > 0;
     if (raw_path) {
-        if (AImageReader_new(raw_w_, raw_h_, AIMAGE_FORMAT_RAW16, kRawBuffers,
-                             &raw_reader_) != AMEDIA_OK) {
-            LOGE("ndk: RAW16 AImageReader failed");
-            return false;
+        if (!raw_reader_) {
+            if (AImageReader_new(raw_w_, raw_h_, AIMAGE_FORMAT_RAW16, kRawBuffers,
+                                 &raw_reader_) != AMEDIA_OK) {
+                LOGE("ndk: RAW16 AImageReader failed");
+                return false;
+            }
+            raw_listener_ = { this, on_raw_image };
+            AImageReader_setImageListener(raw_reader_, &raw_listener_);
+            if (AImageReader_getWindow(raw_reader_, &raw_window_) != AMEDIA_OK) return false;
         }
-        raw_listener_ = { this, on_raw_image };
-        AImageReader_setImageListener(raw_reader_, &raw_listener_);
-        if (AImageReader_getWindow(raw_reader_, &raw_window_) != AMEDIA_OK) return false;
+    } else if (!with_video) {
+        // Full-resolution YUV still stream — photo mode's second output. This
+        // is the exact stream topology the retired Java still path used.
+        //
+        // CPU_READ_OFTEN matters: framework ImageReader allocates YUV consumer
+        // buffers with CPU-read usage, and without it this HAL hands out
+        // zero-filled buffers the ISP apparently never writes into.
+        if (!still_reader_ && still_w_ > 0) {
+            if (AImageReader_newWithUsage(still_w_, still_h_, AIMAGE_FORMAT_YUV_420_888,
+                                          AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                                          kStillBuffers, &still_reader_) != AMEDIA_OK) {
+                LOGE("ndk: YUV still AImageReader failed");
+            } else {
+                still_listener_ = { this, on_still_image };
+                AImageReader_setImageListener(still_reader_, &still_listener_);
+                if (AImageReader_getWindow(still_reader_, &still_window_) != AMEDIA_OK) {
+                    release_still_stream();
+                }
+            }
+        }
     } else {
-        // No RAW: the encoder's own input surface becomes the video stream, so
-        // the camera writes encodable frames directly and nothing is copied.
-        if (video_sizes_.empty()) {
-            LOGI("ndk: no video sizes at the sensor aspect");
-            return false;
-        }
-        const int32_t fps = fps_max_ > 0 ? fps_max_ : 30;
-        if (!encoder_.configure(video_sizes_.data(),
-                                static_cast<int>(video_sizes_.size()), fps, record_sink_))
-            return false;
-        video_available_ = true;
+        // Recording session: the encoder's own input surface becomes the video
+        // stream, so frames never touch the CPU. The encoder itself was
+        // configured once in init(); this only changes session membership.
     }
 
-    // Every stream stays configured for the whole session; recording only
-    // changes which targets the repeating request carries, so REC never
-    // reconfigures the session.
+    // Photo session (non-RAW): preview + full-res YUV still — the topology the
+    // retired Java still path ran. Recording session: preview + encoder
+    // surface. RAW session: preview + RAW16, always.
     if (ACaptureSessionOutputContainer_create(&outputs_) != ACAMERA_OK) return false;
     if (ACaptureSessionOutput_create(preview_window_, &preview_output_) != ACAMERA_OK) return false;
     ACaptureSessionOutputContainer_add(outputs_, preview_output_);
     if (raw_path) {
         if (ACaptureSessionOutput_create(raw_window_, &raw_output_) != ACAMERA_OK) return false;
         ACaptureSessionOutputContainer_add(outputs_, raw_output_);
-    } else {
+    } else if (with_video) {
         if (ACaptureSessionOutput_create(encoder_.input_surface(), &video_output_) != ACAMERA_OK)
             return false;
         ACaptureSessionOutputContainer_add(outputs_, video_output_);
+    } else if (still_window_) {
+        if (ACaptureSessionOutput_create(still_window_, &still_output_) == ACAMERA_OK)
+            ACaptureSessionOutputContainer_add(outputs_, still_output_);
+        else
+            release_still_stream();
     }
 
     sess_cbs_.context   = this;
@@ -272,18 +425,34 @@ bool Session::configure_session() {
     sess_cbs_.onActive  = on_session_active;
     sess_cbs_.onClosed  = on_session_closed;
     if (ACameraDevice_createCaptureSession(device_, outputs_, &sess_cbs_, &session_) != ACAMERA_OK) {
-        LOGE("ndk: createCaptureSession failed");
+        LOGE("ndk: createCaptureSession failed (with_video=%d)", with_video);
         return false;
     }
 
     if (ACameraOutputTarget_create(preview_window_, &preview_target_) != ACAMERA_OK) return false;
     if (raw_path) {
         if (ACameraOutputTarget_create(raw_window_, &raw_target_) != ACAMERA_OK) return false;
-    } else {
+    } else if (with_video) {
         if (ACameraOutputTarget_create(encoder_.input_surface(), &video_target_) != ACAMERA_OK)
             return false;
+    } else if (still_window_) {
+        if (ACameraOutputTarget_create(still_window_, &still_target_) != ACAMERA_OK)
+            release_still_stream();
     }
     return true;
+}
+
+// Drops the YUV still stream entirely, leaving a working preview-only setup.
+// Used at teardown and whenever the still reader cannot be built.
+void Session::release_still_stream() {
+    if (still_target_) { ACameraOutputTarget_free(still_target_);     still_target_ = nullptr; }
+    if (still_output_) { ACaptureSessionOutput_free(still_output_);   still_output_ = nullptr; }
+    if (still_reader_) {
+        AImageReader_setImageListener(still_reader_, nullptr);
+        AImageReader_delete(still_reader_);
+        still_reader_ = nullptr;
+    }
+    still_window_ = nullptr;
 }
 
 // ── Repeating request ────────────────────────────────────────────────────────
@@ -309,22 +478,32 @@ bool Session::build_repeating(bool with_raw) {
         ACaptureRequest_addTarget(request_, raw_target_ ? raw_target_ : video_target_);
     }
 
-    if (fps_max_ > 0) {
+    if (with_raw && fps_max_ > 0) {
         const int32_t fps[2] = { fps_min_, fps_max_ };
         ACaptureRequest_setEntry_i32(request_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps);
     }
-    if (with_raw && raw_target_) {
-        // One white balance per clip: lock AWB so the ISP's gains stay valid for
-        // the whole recording, and report the locked neutral once.
-        const uint8_t lock = 1;
-        ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AWB_LOCK, 1, &lock);
-        neutral_sent_.store(false, std::memory_order_release);
+    if (with_raw) {
+        if (raw_target_) {
+            // One white balance per clip: lock AWB so the ISP's gains stay valid
+            // for the whole recording, and report the locked neutral once.
+            const uint8_t lock = 1;
+            ACaptureRequest_setEntry_u8(request_, ACAMERA_CONTROL_AWB_LOCK, 1, &lock);
+        }
     }
-    if (!raw_target_ && has_manual_post_) {
+    apply_focus_entries(request_);
+    neutral_sent_.store(false, std::memory_order_release);
+    // Recording-only: the flat tonemap exists to make CLIPS gradeable. The
+    // idle/still requests must stay exactly like the Java path's (template +
+    // target, nothing else) — this HAL bleeds repeating-request state into
+    // later one-shots, and a preview pinned to the video curve made every
+    // still come out flat.
+    if (with_raw && !raw_target_ && has_manual_post_) {
         // The video path's actual image-quality win: take the HAL's baked-in
         // contrast curve and its edge/noise processing out of the loop. A
         // straight-line tonemap is the flattest curve the API can express, and
         // it is what makes the recording gradeable instead of pre-cooked.
+        // Recording-only: the preview/still requests stay exactly like the
+        // Java path's (template + target, nothing else).
         const uint8_t tm_mode = ACAMERA_TONEMAP_MODE_CONTRAST_CURVE;
         ACaptureRequest_setEntry_u8(request_, ACAMERA_TONEMAP_MODE, 1, &tm_mode);
         const float curve[4] = { 0.0f, 0.0f, 1.0f, 1.0f };   // (in,out) pairs
@@ -354,9 +533,90 @@ void Session::stop_preview() {
     if (session_) ACameraCaptureSession_stopRepeating(session_);
 }
 
+void Session::apply_focus_entries(ACaptureRequest* req) const {
+    if (!req || !focus_manual_.load(std::memory_order_relaxed)) return;
+    // AF has to be switched off before the lens position is honoured: with any
+    // auto mode running the HAL owns the lens and LENS_FOCUS_DISTANCE is
+    // ignored (or fought over) on the next convergence.
+    const uint8_t af_off = ACAMERA_CONTROL_AF_MODE_OFF;
+    ACaptureRequest_setEntry_u8(req, ACAMERA_CONTROL_AF_MODE, 1, &af_off);
+    float d = focus_diopters_.load(std::memory_order_relaxed);
+    if (d < 0.0f) d = 0.0f;
+    if (d > max_diopters_) d = max_diopters_;
+    ACaptureRequest_setEntry_float(req, ACAMERA_LENS_FOCUS_DISTANCE, 1, &d);
+}
+
+void Session::resubmit_repeating() {
+    if (!session_ || !request_) return;
+    ACameraCaptureSession_captureCallbacks cbs{};
+    cbs.context            = this;
+    cbs.onCaptureCompleted = on_capture_completed;
+    ACameraCaptureSession_setRepeatingRequest(session_, &cbs, 1, &request_, nullptr);
+}
+
+void Session::set_focus(bool manual, float diopters) {
+    const bool was_manual = focus_manual_.exchange(manual, std::memory_order_relaxed);
+    focus_diopters_.store(diopters, std::memory_order_relaxed);
+    if (!session_ || !request_) return;
+
+    if (manual) {
+        // Cheap enough to run per drag tick: the request object is reused, so
+        // this is an entry write plus a re-submit, not a rebuild.
+        apply_focus_entries(request_);
+        resubmit_repeating();
+    } else if (was_manual) {
+        // Handing the lens back needs the full rebuild — the template picks the
+        // right auto mode (CONTINUOUS_PICTURE vs _VIDEO) for the current one,
+        // and there is no "unset" for an entry already written into a request.
+        build_repeating(recording_.load(std::memory_order_acquire));
+    }
+}
+
+bool Session::set_loupe(bool on) {
+    if (on == loupe_on_) return true;
+    if (!loupe_available()) return false;
+    if (recording_.load(std::memory_order_acquire)) {
+        LOGE("ndk: loupe refused while recording");
+        return false;
+    }
+    loupe_on_ = on;
+    // The preview reader is recreated at the new size inside configure_session;
+    // the session must be rebuilt around it because a reader's window is a
+    // session output.
+    if (!configure_session(/*with_video=*/false)) {
+        LOGE("ndk: loupe reconfigure failed, reverting");
+        loupe_on_ = !on;
+        configure_session(/*with_video=*/false);
+        build_repeating(false);
+        return false;
+    }
+    if (!build_repeating(false)) return false;
+    LOGI("ndk: loupe %s (preview %dx%d)", on ? "on" : "off", prev_live_w_, prev_live_h_);
+    return true;
+}
+
 bool Session::start_recording() {
-    // The encoder must be running before the camera starts filling its surface.
-    if (video_available_ && !encoder_.start()) return false;
+    // A recording never runs on the loupe's high-resolution preview: it would
+    // eat the RAW path's frame budget. Clearing the flag here means the rebuild
+    // below (or the explicit one for the RAW path) drops the big stream in the
+    // same reconfigure that starts the recording, rather than in a second one.
+    const bool had_loupe = loupe_on_;
+    loupe_on_ = false;
+
+    if (video_available_) {
+        // Non-RAW devices cannot host preview + encoder-surface + full-res YUV
+        // in one session: the HAL then black-fills the still stream, and if the
+        // still stream rides the repeating request instead the ISP budget
+        // collapses (single-digit fps system-wide). So the session is split,
+        // like the Java path's was: photos run on preview+still, and REC swaps
+        // in the encoder surface. Only REC boundaries pay the reconfigure.
+        if (!configure_session(/*with_video=*/true)) return false;
+        if (!encoder_.start()) return false;
+    } else if (had_loupe) {
+        // The RAW path does not otherwise rebuild the session to record, so the
+        // preview stream has to be brought back down explicitly.
+        if (!configure_session(/*with_video=*/false)) return false;
+    }
     if (!build_repeating(true)) return false;
     recording_.store(true, std::memory_order_release);
     return true;
@@ -365,7 +625,15 @@ bool Session::start_recording() {
 void Session::stop_recording() {
     recording_.store(false, std::memory_order_release);
     build_repeating(false);
-    if (video_available_) encoder_.stop();
+    if (video_available_) {
+        encoder_.stop();
+        // Back to the photo-capable session (preview + full-res YUV still).
+        if (!configure_session(/*with_video=*/false)) {
+            LOGE("ndk: photo session rebuild failed");
+            return;
+        }
+        build_repeating(false);
+    }
 }
 
 bool Session::take_photo(const char* base_path, int shots) {
@@ -374,6 +642,49 @@ bool Session::take_photo(const char* base_path, int shots) {
         LOGE("ndk: takePhoto refused while recording");
         return false;
     }
+
+    // Non-RAW device: the RAW burst below would aim at a null target (this is
+    // exactly why the shutter used to produce nothing here). One full-res YUV
+    // frame -> lossless JXL instead; always single-shot, since the bracket
+    // merge is a Bayer-domain tool this stream can't feed.
+    if (!raw_target_) {
+        if (!still_target_) {
+            LOGE("ndk: takePhoto: no RAW and no YUV still stream");
+            return false;
+        }
+        {
+            std::lock_guard<std::mutex> lk(still_mtx_);
+            still_paths_.assign(1, std::string(base_path) + ".png");
+            still_total_ = 1;
+        }
+        ACaptureRequest* still = nullptr;
+        if (ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &still)
+                != ACAMERA_OK) {
+            LOGE("ndk: still capture request failed");
+            return false;
+        }
+        ACaptureRequest_addTarget(still, still_target_);
+        // Noise reduction is the user's call (the photo-mode NR chip), and the
+        // default is off — raw sensor pixels, matching the clip's flat look.
+        // Tapping it arms the HAL's best in-silicon NR for dim rooms, where
+        // this sensor lands around ISO 3000. Edge enhancement is not toggled.
+        const uint8_t nr = still_nr_on_.load(std::memory_order_relaxed) ? still_nr_
+                                                                        : still_nr_off_;
+        ACaptureRequest_setEntry_u8(still, ACAMERA_NOISE_REDUCTION_MODE, 1, &nr);
+        ACaptureRequest_setEntry_u8(still, ACAMERA_EDGE_MODE, 1, &still_edge_);
+        apply_focus_entries(still);
+
+        ACameraCaptureSession_captureCallbacks cbs{};
+        cbs.context            = this;
+        cbs.onCaptureCompleted = on_capture_completed;
+        const bool ok = ACameraCaptureSession_capture(session_, &cbs, 1, &still, nullptr)
+                        == ACAMERA_OK;
+        ACaptureRequest_free(still);
+        if (ok) LOGI("ndk: YUV still -> %s.png", base_path);
+        else    LOGE("ndk: YUV still submit failed");
+        return ok;
+    }
+
     std::lock_guard<std::mutex> lk(still_mtx_);
     still_paths_.clear();
     still_total_ = shots;
@@ -388,6 +699,7 @@ bool Session::take_photo(const char* base_path, int shots) {
     if (ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &still) != ACAMERA_OK)
         return false;
     ACaptureRequest_addTarget(still, raw_target_);
+    apply_focus_entries(still);
 
     std::vector<ACaptureRequest*> burst(static_cast<size_t>(shots), still);
     ACameraCaptureSession_captureCallbacks cbs{};
@@ -473,9 +785,114 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
     AImage_delete(img);
 }
 
+// Non-RAW still delivery: copy the planes out synchronously (the camera needs
+// its buffer back immediately), pair with the queued name FIFO, then hand the
+// slow JXL encode to the worker thread.
+void Session::on_still_image(void* ctx, AImageReader* reader) {
+    auto* self = static_cast<Session*>(ctx);
+    AImage* img = nullptr;
+    if (AImageReader_acquireLatestImage(reader, &img) != AMEDIA_OK || !img) return;
+
+    // The stream runs continuously in preview mode; without a queued name
+    // there is nothing to develop — drop before the 18 MB copy.
+    {
+        std::lock_guard<std::mutex> lk(self->still_mtx_);
+        if (self->still_paths_.empty()) { AImage_delete(img); return; }
+    }
+
+    StillJob j;
+    uint8_t *yp = nullptr, *up = nullptr, *vp = nullptr;
+    int ylen = 0, ulen = 0, vlen = 0;
+    const bool ok =
+        AImage_getWidth(img,  &j.w) == AMEDIA_OK &&
+        AImage_getHeight(img, &j.h) == AMEDIA_OK &&
+        AImage_getPlaneData(img, 0, &yp, &ylen) == AMEDIA_OK && yp && ylen > 0 &&
+        AImage_getPlaneData(img, 1, &up, &ulen) == AMEDIA_OK && up && ulen > 0 &&
+        AImage_getPlaneData(img, 2, &vp, &vlen) == AMEDIA_OK && vp && vlen > 0 &&
+        AImage_getPlaneRowStride(img, 0, &j.y_stride) == AMEDIA_OK &&
+        AImage_getPlaneRowStride(img, 1, &j.u_stride) == AMEDIA_OK &&
+        AImage_getPlaneRowStride(img, 2, &j.v_stride) == AMEDIA_OK &&
+        AImage_getPlanePixelStride(img, 1, &j.uv_pix) == AMEDIA_OK;
+
+    if (ok) {
+        j.y.assign(yp, yp + ylen);
+        j.u.assign(up, up + ulen);
+        j.v.assign(vp, vp + vlen);
+        LOGI("ndk: still frame %dx%d yStride=%d uvPix=%d", j.w, j.h, j.y_stride, j.uv_pix);
+        std::lock_guard<std::mutex> lk(self->still_mtx_);
+        if (!self->still_paths_.empty()) {
+            j.path = self->still_paths_.front();
+            self->still_paths_.erase(self->still_paths_.begin());
+        }
+    }
+    AImage_delete(img);
+
+    if (!ok || j.path.empty()) {
+        LOGE("ndk: YUV still dropped (copy=%d queued-name=%s)", ok,
+             self->still_paths_.empty() ? "none" : "present");
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(self->still_job_mtx_);
+        self->still_jobs_.push_back(std::move(j));
+    }
+    self->still_job_cv_.notify_one();
+}
+
+// Encodes queued YUV stills off the camera threads. Drains everything before
+// exiting so a shot taken just before shutdown is not lost.
+void Session::still_worker_loop() {
+    for (;;) {
+        StillJob j;
+        {
+            std::unique_lock<std::mutex> lk(still_job_mtx_);
+            still_job_cv_.wait(lk, [this] {
+                return still_worker_quit_ || !still_jobs_.empty();
+            });
+            if (still_jobs_.empty()) return;
+            j = std::move(still_jobs_.front());
+            still_jobs_.pop_front();
+        }
+        // Lossless PNG, not JXL. A device on this path has no RAW stream, so this
+        // file IS the capture — there is no DNG behind it to fall back on, and it
+        // has to open everywhere. Android cannot decode JXL (verified: the media
+        // scanner reports width=NULL for a .jxl), so the format that was chosen
+        // for size made the one deliverable these devices produce unviewable on
+        // the device that shot it.
+        cam::write_png_yuv420(j.path,
+                              j.y.data(), j.u.data(), j.v.data(),
+                              j.w, j.h, j.y_stride, j.u_stride, j.v_stride, j.uv_pix,
+                              sensor_orientation_);
+        // Register the deliverable even though this path never touched Java:
+        // the host collects whatever the session reports.
+        jni::session_record_file(j.path);
+    }
+}
+
 void Session::on_capture_completed(void* ctx, ACameraCaptureSession*,
                                    ACaptureRequest*, const ACameraMetadata* result) {
     auto* self = static_cast<Session*>(ctx);
+
+    // Where the lens actually is. Read before the neutral bail-out below, so a
+    // device that reports no neutral colour point still tracks focus: arming
+    // manual focus adopts this value instead of snapping the lens to infinity.
+    ACameraMetadata_const_entry lf{};
+    if (ACameraMetadata_getConstEntry(result, ACAMERA_LENS_FOCUS_DISTANCE, &lf) == ACAMERA_OK &&
+        lf.count > 0) {
+        self->reported_diopters_.store(lf.data.f[0], std::memory_order_relaxed);
+    }
+
+    // The noise model for THIS result. Latched unconditionally, like the neutral
+    // below: it varies with ISO, so the value that matters is the one from the
+    // shot being written, not one read once at startup.
+    ACameraMetadata_const_entry np{};
+    if (ACameraMetadata_getConstEntry(result, ACAMERA_SENSOR_NOISE_PROFILE, &np) == ACAMERA_OK
+        && np.count >= 2) {
+        const int n = int(np.count) > 8 ? 8 : int(np.count);
+        for (int i = 0; i < n; ++i)
+            self->noise_profile_[i].store(np.data.d[i], std::memory_order_relaxed);
+        self->noise_profile_count_.store(n, std::memory_order_release);
+    }
 
     ACameraMetadata_const_entry e{};
     if (ACameraMetadata_getConstEntry(result, ACAMERA_SENSOR_NEUTRAL_COLOR_POINT, &e) != ACAMERA_OK
@@ -502,20 +919,52 @@ void Session::on_capture_completed(void* ctx, ACameraCaptureSession*,
     LOGI("ndk: locked neutral %.4f %.4f %.4f", neutral[0], neutral[1], neutral[2]);
 }
 
+bool Session::noise_profile(double out[8], int& count) const {
+    const int n = noise_profile_count_.load(std::memory_order_acquire);
+    if (n <= 0) { count = 0; return false; }
+    for (int i = 0; i < n; ++i) out[i] = noise_profile_[i].load(std::memory_order_relaxed);
+    count = n;
+    return true;
+}
+
 void Session::on_disconnected(void*, ACameraDevice*)      { LOGE("ndk: camera disconnected"); }
 void Session::on_device_error(void*, ACameraDevice*, int e){ LOGE("ndk: camera error %d", e); }
 void Session::on_session_ready(void*, ACameraCaptureSession*)  {}
 void Session::on_session_active(void*, ACameraCaptureSession*) {}
-void Session::on_session_closed(void*, ACameraCaptureSession*) { LOGI("ndk: session closed"); }
+void Session::on_session_closed(void* ctx, ACameraCaptureSession*) {
+    LOGI("ndk: session closed");
+    auto* self = static_cast<Session*>(ctx);
+    if (!self) return;
+    {
+        std::lock_guard<std::mutex> lk(self->session_close_mtx_);
+        self->session_closed_ = true;
+    }
+    self->session_close_cv_.notify_all();
+}
+
+void Session::close_session_and_wait() {
+    if (!session_) return;
+    {
+        std::lock_guard<std::mutex> lk(session_close_mtx_);
+        session_closed_ = false;
+    }
+    ACameraCaptureSession_stopRepeating(session_);
+    ACameraCaptureSession_close(session_);
+    session_ = nullptr;
+
+    // Bounded: a HAL that never calls back must not deadlock the UI thread.
+    // Proceeding after the timeout is no worse than not waiting at all.
+    std::unique_lock<std::mutex> lk(session_close_mtx_);
+    if (!session_close_cv_.wait_for(lk, std::chrono::milliseconds(400),
+                                    [this] { return session_closed_; })) {
+        LOGE("ndk: session close timed out; continuing");
+    }
+}
 
 // ── Teardown ─────────────────────────────────────────────────────────────────
 
 void Session::teardown_session() {
-    if (session_) {
-        ACameraCaptureSession_stopRepeating(session_);
-        ACameraCaptureSession_close(session_);
-        session_ = nullptr;
-    }
+    close_session_and_wait();
     if (request_)        { ACaptureRequest_free(request_);                 request_ = nullptr; }
     if (preview_target_) { ACameraOutputTarget_free(preview_target_);      preview_target_ = nullptr; }
     if (raw_target_)     { ACameraOutputTarget_free(raw_target_);          raw_target_ = nullptr; }
@@ -530,7 +979,21 @@ void Session::shutdown() {
     recording_.store(false, std::memory_order_release);
     encoder_.stop();
     video_available_ = false;
+    // Stop the JXL worker first; it touches no camera objects, but its queue
+    // must be drained before the object can die. Pending shots flush.
+    {
+        std::lock_guard<std::mutex> lk(still_job_mtx_);
+        still_worker_quit_ = true;
+    }
+    still_job_cv_.notify_all();
+    if (still_worker_.joinable()) still_worker_.join();
+    still_worker_quit_ = false;
+    {
+        std::lock_guard<std::mutex> lk(still_mtx_);
+        still_paths_.clear();
+    }
     teardown_session();
+    release_still_stream();
 
     // Clear the listeners before deleting the readers, or a frame already in
     // flight can call back into a half-destroyed Session.

@@ -33,6 +33,8 @@ struct MergeResult {
     std::vector<float>  radiance;        // W*H Bayer, ref-exposure counts (black=0)
     double              ref_span = 1.0;  // 0 EV usable span (white-black) -> maps to 1.0
     double              out_white = 65535.0; // 16-bit white for the DNG quantization
+    double              dng_scale = 1.0;     // radiance * dng_scale -> DNG code value
+    double              max_boost = 1.0;     // 1/min(eRel): stops of headroom above ref white
     float               neutral[3] = {1, 1, 1};
     dng::DngMeta        meta;            // static tags (CFA, colour matrices) + geometry
 };
@@ -44,6 +46,13 @@ struct MergeResult {
 // can't merge — the caller keeps the per-shot source DNGs as the fallback.
 MergeResult merge_raw_bracket(const std::vector<BracketFrame>& frames,
                               const dng::DngMeta& base_meta);
+
+// Quantizes a MergeResult's float radiance to the 16-bit Bayer plane the DNG
+// stores (black=0, white=out_white), and fills `meta_out` with the matching tags.
+// Split out of write_merged_dng so the developed still can reuse the exact same
+// quantization: the DNG and the JXL then agree by construction rather than by two
+// code paths happening to round the same way.
+void quantize(const MergeResult& r, std::vector<uint16_t>& out, dng::DngMeta& meta_out);
 
 // Quantizes a MergeResult to a 16-bit Bayer DNG at `out_path` (black=0,
 // white=out_white). Stays fully RAW (no demosaic/tone curve).

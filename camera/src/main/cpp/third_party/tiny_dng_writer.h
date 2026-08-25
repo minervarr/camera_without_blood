@@ -76,6 +76,7 @@ typedef enum {
   TIFFTAG_ANALOG_BALANCE = 50727,
   TIFFTAG_AS_SHOT_NEUTRAL = 50728,
   TIFFTAG_AS_SHOT_WHITE_XY = 50729,
+  TIFFTAG_BASELINE_EXPOSURE = 50730,
   TIFFTAG_CALIBRATION_ILLUMINANT1 = 50778,
   TIFFTAG_CALIBRATION_ILLUMINANT2 = 50779,
   TIFFTAG_EXTRA_CAMERA_PROFILES = 50933,
@@ -84,7 +85,8 @@ typedef enum {
   TIFFTAG_DEFAULT_BLACK_RENDER = 51110,
   TIFFTAG_ACTIVE_AREA = 50829,
   TIFFTAG_FORWARD_MATRIX1 = 50964,
-  TIFFTAG_FORWARD_MATRIX2 = 50965
+  TIFFTAG_FORWARD_MATRIX2 = 50965,
+  TIFFTAG_NOISE_PROFILE = 51041
 } Tag;
 
 // SUBFILETYPE(bit field)
@@ -245,6 +247,27 @@ class DNGImage {
 
   /// Specify the the selected white balance at time of capture, encoded as x-y chromaticity coordinates.
   bool SetAsShotWhiteXY(const double x, const double y);
+
+  /// Specify BaselineExposure (50730): how many stops the developer should
+  /// shift the image by. Needed whenever the stored data is deliberately not
+  /// scaled so that WhiteLevel means "diffuse white" — an HDR merge that keeps
+  /// headroom above the reference exposure stores everything darker by exactly
+  /// that headroom, and without this tag every compliant developer renders it
+  /// that many stops dark.
+  bool SetBaselineExposure(const double value);
+
+  /// Specify NoiseProfile (51041): the sensor's noise model, as one (S, O) pair
+  /// per CFA channel, in the order the CFAPattern gives. Variance at a signal
+  /// level x (normalised to [0,1]) is S*x + O — the Poisson (shot) term scales
+  /// with the signal, the Gaussian (read) term does not.
+  ///
+  /// This is the tag that lets a developer denoise CORRECTLY rather than by
+  /// guesswork: without it, anything downstream has to estimate how noisy the
+  /// frame is from the pixels themselves, and a learned denoiser given the wrong
+  /// noise level either smears real detail or invents texture that was never
+  /// there. Android hands the exact per-shot values over as
+  /// ACAMERA_SENSOR_NOISE_PROFILE, so there is no reason to make anyone guess.
+  bool SetNoiseProfile(const unsigned int num_values, const double *values);
 
   /// Set image data with packing (take 16-bit values and pack them to input_bpp values).
   bool SetImageDataPacked(const unsigned short *input_buffer, const int input_count, const unsigned int input_bpp, bool big_endian);
@@ -2024,6 +2047,60 @@ bool DNGImage::SetCameraCalibration2(const unsigned int plane_count,
     return false;
   }
 
+  num_fields_++;
+  return true;
+}
+
+bool DNGImage::SetBaselineExposure(const double value) {
+  double numerator, denominator;
+  if (DoubleToRational(std::fabs(value), &numerator, &denominator) != 0) {
+    return false;
+  }
+  // SRATIONAL: the numerator is signed, so the sign rides there.
+  int32_t vs[2];
+  vs[0] = static_cast<int32_t>(static_cast<int64_t>(numerator));
+  if (value < 0.0) vs[0] = -vs[0];
+  vs[1] = static_cast<int32_t>(denominator);
+  if (swap_endian_) {
+    swap4(reinterpret_cast<unsigned int *>(&vs[0]));
+    swap4(reinterpret_cast<unsigned int *>(&vs[1]));
+  }
+  bool ret = WriteTIFFTag(static_cast<unsigned short>(TIFFTAG_BASELINE_EXPOSURE),
+                          TIFF_SRATIONAL, 1,
+                          reinterpret_cast<const unsigned char *>(vs),
+                          &ifd_tags_, &data_os_);
+  if (!ret) {
+    return false;
+  }
+  num_fields_++;
+  return true;
+}
+
+bool DNGImage::SetNoiseProfile(const unsigned int num_values,
+                               const double *values) {
+  if (num_values == 0 || values == NULL) {
+    return false;
+  }
+  // TIFF_DOUBLE, not a rational: the DNG spec types NoiseProfile as DOUBLE, and
+  // the O term is small enough (order 1e-6) that forcing it through
+  // DoubleToRational would quantise it to nothing.
+  std::vector<uint64_t> vs(num_values);
+  for (unsigned int i = 0; i < num_values; i++) {
+    double d = values[i];
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    if (swap_endian_) {
+      swap8(&bits);
+    }
+    vs[i] = bits;
+  }
+  bool ret = WriteTIFFTag(static_cast<unsigned short>(TIFFTAG_NOISE_PROFILE),
+                          TIFF_DOUBLE, num_values,
+                          reinterpret_cast<const unsigned char *>(vs.data()),
+                          &ifd_tags_, &data_os_);
+  if (!ret) {
+    return false;
+  }
   num_fields_++;
   return true;
 }

@@ -118,6 +118,19 @@ add_library(EBML::ebml ALIAS ebml)
 set(CMAKE_DISABLE_FIND_PACKAGE_EBML ON)
 add_subdirectory(${THIRDPARTY_DIR}/libmatroska ${CMAKE_BINARY_DIR}/libmatroska)
 
+# ── libjxl: REMOVED ───────────────────────────────────────────────────────────
+# The camera is capture-only now: RAW devices write DNGs and nothing else, and
+# devices without a RAW stream write a lossless PNG (which, unlike JXL, Android
+# can actually decode — the media scanner reports width=NULL for a .jxl). With
+# no JXL written anywhere, libjxl was linking ~11 MB of encoder, plus its
+# vendored highway/brotli/lcms, into every build for no caller. Developing and
+# rendering happen in the post app, which reads the DNG.
+#
+# If it ever comes back, note the trap it left behind: AGP's debug variant leaves
+# CMAKE_*_FLAGS_DEBUG at "-g" with no -O, so an add_subdirectory dependency
+# inherits -O0 while camera_recorder's own target_compile_options keep it at -O2.
+# libjxl+highway at -O0 encoded a 12 MP still ~20x slower — minutes, not seconds.
+
 # ── Shader compilation (slangc from Vulkan SDK) ───────────────────────────────
 # Reusable Slang→SPIR-V helper provided by the canvas library. Override the
 # compiler path with -DVCE_SLANGC=/path/to/slangc if the Vulkan SDK is elsewhere.
@@ -237,6 +250,8 @@ target_link_libraries(camera_recorder
     # Audio and DSP
     FLAC
     kiss_fft
+
+    # JPEG XL: BT.2020/PQ 16-bit HDR stills (camera/still_writer.cc)
     soxr
     onnxruntime
     # Audio (USB capture + FLAC encoding)
@@ -253,7 +268,7 @@ target_link_libraries(camera_recorder
     vulkan
     android
     log
-    z          # zlib: 16-bit PNG deflate (still_writer)
+    z          # zlib: pulled in by libpng/flac deps
     EGL
     GLESv3
 )
