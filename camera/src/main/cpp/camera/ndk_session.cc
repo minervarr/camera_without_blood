@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace ndkcam {
@@ -111,6 +112,18 @@ bool Session::pick_camera() {
                                 : std::vector<StreamSize>{};
             if (true) {
                 if (!raws.empty()) {
+                    // Diagnostic: the full advertised list, not just the winner.
+                    // Most sensors advertise exactly one RAW16 size, but if this
+                    // device offers a smaller one, selecting it would cut the
+                    // camera-thread memcpy and the FrameStore's ~0.4 GB as well —
+                    // savings the GPU-side 2x2 bin cannot reach. Note the size is
+                    // picked TWICE and independently (here, and again in
+                    // dng_meta_source.cc's load_static_meta, which is the copy the
+                    // ISP is actually sized from): change one without the other
+                    // and RawVideoPipeline::on_frame drops every frame on a
+                    // geometry mismatch.
+                    for (const auto& r : raws)
+                        LOGI("ndk: RAW16 size available %dx%d", r.w, r.h);
                     // Largest RAW16 stream: the sensor's full binned readout.
                     auto best = *std::max_element(raws.begin(), raws.end(),
                         [](const StreamSize& a, const StreamSize& b) {
@@ -242,6 +255,16 @@ bool Session::pick_camera() {
                     static_meta_.white_level = q.data.i32[0];
                 if (ACameraMetadata_getConstEntry(meta, ACAMERA_SENSOR_BLACK_LEVEL_PATTERN, &q) == ACAMERA_OK && q.count >= 4)
                     for (int k = 0; k < 4; ++k) static_meta_.black_level[k] = float(q.data.i32[k]);
+                // AE bracket limits. Compensation is requested in STEP units;
+                // both the range and the step size are characteristics.
+                if (ACameraMetadata_getConstEntry(meta, ACAMERA_CONTROL_AE_COMPENSATION_RANGE, &q) == ACAMERA_OK && q.count >= 2) {
+                    ae_comp_min_ = q.data.i32[0];
+                    ae_comp_max_ = q.data.i32[1];
+                }
+                if (ACameraMetadata_getConstEntry(meta, ACAMERA_CONTROL_AE_COMPENSATION_STEP, &q) == ACAMERA_OK && q.count >= 1) {
+                    ae_comp_step_num_ = q.data.r[0].numerator;
+                    ae_comp_step_den_ = q.data.r[0].denominator ? q.data.r[0].denominator : 3;
+                }
                 static_meta_.width  = raw_w_;
                 static_meta_.height = raw_h_;
             }
@@ -695,19 +718,58 @@ bool Session::take_photo(const char* base_path, int shots) {
     }
     // The RAW stream is already part of the session, so a still is just a
     // one-shot request against the same target.
-    ACaptureRequest* still = nullptr;
-    if (ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &still) != ACAMERA_OK)
-        return false;
-    ACaptureRequest_addTarget(still, raw_target_);
-    apply_focus_entries(still);
+    //
+    // A MULTI-SHOT still is an exposure bracket: -2 / 0 / +2 EV by burst
+    // position, same order the Java fallback used (index 0 = darkest, which is
+    // the convention hdr_merge's BracketFrame::index documents). The old code
+    // queued `shots` copies of ONE request — three identical exposures, so the
+    // merge had zero real highlight headroom and every blown LED core landed
+    // pinned at white. Compensation is quantized to the HAL's step and clamped
+    // to its range; on a device that cannot bracket, everything collapses to 0
+    // and behaves exactly like the old single-request burst.
+    const int nreq = shots;
+    int comp[3] = {0, 0, 0};
+    if (shots > 1 && ae_comp_step_den_ > 0) {
+        const double step_ev = double(ae_comp_step_num_) / ae_comp_step_den_;
+        int two = int(std::lround(2.0 / step_ev));
+        two = std::max(ae_comp_min_, std::min(ae_comp_max_, two));
+        const int pos_two = std::max(ae_comp_min_, std::min(ae_comp_max_, two));
+        const int neg_two = std::max(ae_comp_min_, std::min(ae_comp_max_, -pos_two));
+        comp[0] = neg_two;                       // darkest first
+        comp[1] = 0;                             // reference
+        comp[2] = (shots > 2) ? pos_two : 0;     // brightest last
+    }
+    std::vector<ACaptureRequest*> burst;
+    burst.reserve(size_t(nreq));
+    for (int i = 0; i < nreq; ++i) {
+        ACaptureRequest* req = nullptr;
+        if (ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &req)
+                != ACAMERA_OK) {
+            for (auto* r : burst) ACaptureRequest_free(r);
+            return false;
+        }
+        ACaptureRequest_addTarget(req, raw_target_);
+        apply_focus_entries(req);
+        if (shots > 1)
+            ACaptureRequest_setEntry_i32(req, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION,
+                                         1, &comp[std::min(i, 2)]);
+        burst.push_back(req);
+    }
+    // Expect exactly `shots` result metadata deliveries; on_capture_completed
+    // latches their measured exposure into still_expo_ in the same order.
+    expect_expo_ = shots;
 
-    std::vector<ACaptureRequest*> burst(static_cast<size_t>(shots), still);
     ACameraCaptureSession_captureCallbacks cbs{};
     cbs.context            = this;
     cbs.onCaptureCompleted = on_capture_completed;
-    const bool ok = ACameraCaptureSession_capture(session_, &cbs, shots, burst.data(), nullptr)
+    const bool ok = ACameraCaptureSession_capture(session_, &cbs, nreq,
+                                                  burst.data(), nullptr)
                     == ACAMERA_OK;
-    ACaptureRequest_free(still);
+    for (auto* r : burst) ACaptureRequest_free(r);
+    if (!ok) {
+        expect_expo_ = 0;
+        still_expo_.clear();
+    }
     return ok;
 }
 
@@ -752,6 +814,8 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
         } else {
             std::string path;
             int index = 0, total = 0;
+            int64_t exposure_ns = 0;
+            int iso = 0;
             {
                 std::lock_guard<std::mutex> lk(self->still_mtx_);
                 if (!self->still_paths_.empty()) {
@@ -759,6 +823,13 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
                     self->still_paths_.erase(self->still_paths_.begin());
                     total = self->still_total_;
                     index = total - int(self->still_paths_.size()) - 1;
+                }
+                // The bracket's measured exposure for THIS frame, latched by
+                // on_capture_completed in the same order frames are delivered.
+                if (!self->still_expo_.empty()) {
+                    exposure_ns = self->still_expo_.front().first;
+                    iso         = self->still_expo_.front().second;
+                    self->still_expo_.erase(self->still_expo_.begin());
                 }
             }
             if (!path.empty() && self->raw_sink_.on_raw) {
@@ -778,7 +849,7 @@ void Session::on_raw_image(void* ctx, AImageReader* reader) {
                                        reinterpret_cast<const uint16_t*>(data), w, h, stride,
                                        has_neutral ? neutral : nullptr,
                                        black, self->static_meta_.white_level,
-                                       0, 0, index, total);
+                                       exposure_ns, iso, index, total);
             }
         }
     }
@@ -872,6 +943,30 @@ void Session::still_worker_loop() {
 void Session::on_capture_completed(void* ctx, ACameraCaptureSession*,
                                    ACaptureRequest*, const ACameraMetadata* result) {
     auto* self = static_cast<Session*>(ctx);
+
+    // The bracket's real exposures. hdr_merge derives each frame's gain from
+    // exposure×ISO when they are known and only falls back to nominal 2-EV
+    // steps otherwise, so latching the measurement is what makes the merge
+    // exact when AE lands off the requested compensation. Latched in burst
+    // order (results for one capture() call arrive in request order) and
+    // consumed FIFO by on_raw_image next to the path pop.
+    {
+        std::lock_guard<std::mutex> lk(self->still_mtx_);
+        if (self->expect_expo_ > 0) {
+            int64_t ns = 0;
+            int iso = 0;
+            ACameraMetadata_const_entry et{};
+            if (ACameraMetadata_getConstEntry(result, ACAMERA_SENSOR_EXPOSURE_TIME, &et)
+                    == ACAMERA_OK && et.count >= 1)
+                ns = et.data.i64[0];
+            ACameraMetadata_const_entry se{};
+            if (ACameraMetadata_getConstEntry(result, ACAMERA_SENSOR_SENSITIVITY, &se)
+                    == ACAMERA_OK && se.count >= 1)
+                iso = se.data.i32[0];
+            self->still_expo_.emplace_back(ns, iso);
+            --self->expect_expo_;
+        }
+    }
 
     // Where the lens actually is. Read before the neutral bail-out below, so a
     // device that reports no neutral colour point still tracks focus: arming

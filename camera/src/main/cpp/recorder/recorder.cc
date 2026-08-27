@@ -242,6 +242,15 @@ void Recorder::on_video_packet(const uint8_t* data, int len, int64_t pts_us, boo
 
 // Picks RAW_PQ when the device streams RAW16 and has a P010 HEVC Main10
 // encoder (probed by RawVideoPipeline::init); LEGACY_HLG otherwise.
+// Half-resolution binned RAW video: each 2x2 CFA quad becomes one output pixel,
+// so the ISP, the denoise and the encoder all work on a quarter of the area.
+// Full resolution held 30 fps only while the GPU was cool — a long take decayed
+// to ~18 fps once Android thermally throttled the Adreno, and frame rate is the
+// one thing a recorder cannot give up. Set false to record at full sensor
+// resolution again (and to get the demosaic + Bayer-NLM chain back).
+// See RawVideoPipeline::init and isp/shaders_src/bin_isp.slang.
+constexpr bool kBinnedRawVideo = true;
+
 void Recorder::choose_video_mode() {
     if (mode_chosen_) return;
     mode_chosen_ = true;
@@ -252,7 +261,7 @@ void Recorder::choose_video_mode() {
     video_mode_ = VideoMode::LEGACY_HLG;
     if (raw_meta_loaded_ && raw_w_ > 0 && raw_h_ > 0) {
         raw_pipeline_ = std::make_unique<isp::RawVideoPipeline>();
-        if (raw_pipeline_->init(assets_, raw_meta_, raw_w_, raw_h_, 30)) {
+        if (raw_pipeline_->init(assets_, raw_meta_, raw_w_, raw_h_, 30, kBinnedRawVideo)) {
             raw_pipeline_->set_callbacks(
                 [this](const uint8_t* csd, int len, int w, int h) {
                     on_video_format(csd, len, w, h);
@@ -338,8 +347,19 @@ bool Recorder::start_preview(Renderer* renderer) {
         jni::RawVideoSink raw_video{};
         raw_video.on_frame = [this](const uint8_t* data, int w, int h,
                                     int stride, int64_t ts_ns) {
-            if (state_ == State::SAVING && raw_pipeline_)
-                raw_pipeline_->on_frame(data, w, h, stride, ts_ns);
+            if (state_ != State::SAVING || !raw_pipeline_) return;
+            // The sensor's measured noise model for this frame, the same accessor
+            // the still DNG path uses above. It tracks the live ISO, so handing it
+            // to the ISP is what makes the video denoise strength automatically
+            // correct in the dark without any user control. Cheap: eight relaxed
+            // atomic loads, on a thread that is already copying a 25 MB frame.
+            if (ndk_session_) {
+                double np[8]{};
+                int npc = 0;
+                if (ndk_session_->noise_profile(np, npc) && npc >= 2)
+                    raw_pipeline_->set_noise_profile(np, npc);
+            }
+            raw_pipeline_->on_frame(data, w, h, stride, ts_ns);
         };
         raw_video.on_neutral = [this](const float neutral[3]) {
             if (raw_pipeline_) raw_pipeline_->set_neutral(neutral);

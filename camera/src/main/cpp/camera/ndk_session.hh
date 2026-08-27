@@ -11,10 +11,12 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace ndkcam {
@@ -273,6 +275,17 @@ private:
     std::mutex               still_mtx_;
     std::vector<std::string> still_paths_;
     int                      still_total_ = 0;
+
+    // Per-burst exposure bracket. `ae_comp_*` are static characteristics read
+    // at open: the compensation RANGE (in step units) and the STEP itself as a
+    // rational, so requested EV can be quantized the way the HAL demands.
+    // `still_expo_` latches the real SENSOR_EXPOSURE_TIME×SENSITIVITY of each
+    // burst shot, FIFO-paired with `still_paths_`; hdr_merge prefers measured
+    // ratios and only falls back to nominal 2-EV steps when these are zero.
+    int ae_comp_min_ = 0, ae_comp_max_ = 0;
+    int ae_comp_step_num_ = 1, ae_comp_step_den_ = 3;   // default 1/3 EV
+    std::vector<std::pair<int64_t,int>> still_expo_;    // guarded by still_mtx_
+    int expect_expo_ = 0;                               // burst results outstanding
 
     dng::DngMeta static_meta_{};
 

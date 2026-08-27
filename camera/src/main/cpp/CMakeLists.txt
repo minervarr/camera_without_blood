@@ -159,7 +159,8 @@ vce_compile_slang(compile_canvas_shaders ${SHADER_OUT_DIR}
 # init() rather than at build time — keep this list in sync with build_vulkan().
 vce_compile_slang(compile_isp_shaders ${SHADER_OUT_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/isp/shaders_src
-    nlm_bayer nlm_bayer_fp16 green_isp debayer_isp chroma_denoise)
+    nlm_bayer nlm_bayer_fp16 green_isp debayer_isp chroma_denoise
+    bin_isp nlm_rgb nlm_rgb_fp16 chroma_median)
 
 # ── Main shared library ───────────────────────────────────────────────────────
 add_library(camera_recorder SHARED

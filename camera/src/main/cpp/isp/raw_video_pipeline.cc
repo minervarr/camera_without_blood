@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
@@ -38,6 +39,19 @@ constexpr int32_t kBitrateModeVbr      = 1;   // BITRATE_MODE_VBR
 // ceiling (240 Mbps) so the encoder negotiates L6.1 (480 Mbps ceiling), which
 // Adreno 740 + modern players handle fine. The cap stays under L6.1 High tier.
 constexpr double  kTargetBpp           = 0.80;
+// Binned (half-resolution) path. At 0.80 bpp a 2040x1530p30 stream would be only
+// ~75 Mbps — a quarter of what the full-res path already sustains, against an
+// encoder ceiling it was nowhere near. Spending those bits back is the cheapest
+// quality available here: ~2.6 bpp is close to visually lossless for HEVC Main10,
+// and it lands at roughly the same ~240 Mbps and the same file size per minute as
+// a full-res clip, so nothing about storage planning changes. It also means the
+// encoder is no longer asked to spend a large share of its bits describing
+// sensor noise that nlm_rgb has already removed.
+// 2.60 bpp -> ~243 Mbps requested. Raising this does NOTHING: device-measured,
+// asking for 449 Mbps delivered 253, exactly what asking for 243 delivered. The
+// encoder has its own ~254 Mbps hardware wall and ignores the request above it.
+// Do not "fix" an encoder-quality problem by raising this number.
+constexpr double  kTargetBppBinned     = 2.60;
 constexpr int32_t kMaxBitrate          = 460'000'000;  // safe ceiling under L6.1 High tier
 constexpr int32_t kGopSeconds          = 5;   // keyframe interval; 1s pulsed a ~1Hz hitch
 
@@ -91,6 +105,50 @@ struct ChromaPush {
     float    sigma_l;             // luma range sigma (10-bit units)
 };
 static_assert(sizeof(ChromaPush) == 32, "chroma push constant layout drift");
+
+// Must match the PushConstants block in bin_isp.slang (48 bytes). float4 black
+// aligns to a 16-byte boundary (std140), which is what the explicit padding
+// after `white` is for — the shader declares the same two-float hole.
+struct BinPush {
+    uint32_t out_w, out_h;   // outDim
+    uint32_t raw_w, raw_h;   // rawDim
+    uint32_t cfa;            // pattern only (low 2 bits)
+    float    white;
+    float    pad[2];
+    float    black[4];
+};
+static_assert(sizeof(BinPush) == 48, "bin push constant layout drift");
+
+// Must match the PushConstants block in nlm_rgb.slang (112 bytes). The ten
+// leading scalars come to 40 bytes; the explicit pad carries them to 48 so the
+// four float4 rows land 16-byte aligned, which is what the shader's std140
+// layout does implicitly. Drop the pad and every colour matrix shifts by 8 bytes.
+struct NlmRgbPush {
+    uint32_t out_w, out_h;        // outDim — the ENCODED, CTU-padded size
+    uint32_t src_w, src_h;        // srcDim — the real size rgb_buf holds
+    uint32_t stride_pixels;       // Y stride in pixels (padded domain)
+    uint32_t uv_word_offset;      // CbCr plane start (uint32 words, padded)
+    float    noise_k;             // already scaled by kBinNoiseScale
+    float    noise_floor;         // likewise
+    float    h_scale;             // NLM filter strength
+    uint32_t flags;               // bit 0 = denoise on
+    uint32_t pad[2];              // align the float4s — see above
+    float    wb[4];               // .w = pqScale
+    float    ccm0[4], ccm1[4], ccm2[4];
+};
+static_assert(sizeof(NlmRgbPush) == 112, "nlm_rgb push constant layout drift");
+
+// Must match the PushConstants block in chroma_median.slang (32 bytes). src and
+// dst strides are separate on purpose — see the shader's comment.
+struct ChromaMedianPush {
+    uint32_t out_w, out_h;
+    uint32_t src_stride;
+    uint32_t dst_stride;
+    uint32_t dst_offset;      // 0 for a scratch target, uv_word_offset for P010
+    uint32_t dilation;        // tap SPACING (1 or 2) — never a tap count
+    uint32_t pad[2];
+};
+static_assert(sizeof(ChromaMedianPush) == 32, "chroma median push constant layout drift");
 
 int64_t clock_ns(clockid_t clk) {
     struct timespec ts {};
@@ -193,6 +251,41 @@ void RawVideoPipeline::set_neutral(const float neutral[3]) {
     }
 }
 
+// The sensor's own noise model for the frame being captured, straight from
+// ACAMERA_SENSOR_NOISE_PROFILE: variance at normalised signal x is S*x + O, per
+// CFA channel. That is exactly the form nlm_rgb.slang's noiseK/noiseFloor take,
+// so this replaces the hardcoded kNoiseK/kNoiseFloor guesses with a measurement
+// that tracks the ISO actually in use — which is what makes the denoise strength
+// automatically right in a dark room and gentle in a bright one.
+//
+// The four CFA channels are averaged into one (S, O). nlm_rgb denoises a
+// demosaic-free RGB plane whose patch distance is a luma mix of all three
+// channels, so a per-channel model has nowhere to be applied; the mean is the
+// honest summary. kBinNoiseScale is applied at use, not here.
+//
+// Written on the camera thread once per frame, read on the pipeline thread while
+// recording the command buffer — same lock-free pattern as set_neutral above.
+void RawVideoPipeline::set_noise_profile(const double np[8], int count) {
+    if (count < 2) return;
+    const int pairs = count / 2;
+    double s = 0.0, o = 0.0;
+    for (int i = 0; i < pairs; ++i) { s += np[i * 2]; o += np[i * 2 + 1]; }
+    s /= pairs;
+    o /= pairs;
+    // A HAL that reports a degenerate model would otherwise switch the denoise
+    // off entirely; keep the compiled-in fallback in that case.
+    if (!(s > 0.0) || !(o >= 0.0)) return;
+    noise_s_.store(static_cast<float>(s), std::memory_order_relaxed);
+    noise_o_.store(static_cast<float>(o), std::memory_order_relaxed);
+    if (!noise_valid_.exchange(true, std::memory_order_release)) {
+        // Logged once per clip: this is the number that decides whether the
+        // denoiser was previously over- or under-filtering (the hardcoded pair
+        // was S=%.4f O=%.5f).
+        LOGI("sensor noise profile: S=%.6f O=%.7f (%d pairs) | hardcoded was S=%.4f O=%.5f",
+             s, o, pairs, kNoiseK, kNoiseFloor);
+    }
+}
+
 // On this pipeline the audio is anchored to CLOCK_MONOTONIC, but the camera
 // sensor timestamp may be CLOCK_BOOTTIME (differs by accumulated suspend time)
 // or some other epoch. Rebase onto MONOTONIC so A/V share one clock; the offset
@@ -217,17 +310,55 @@ int64_t RawVideoPipeline::compute_ts_offset(int64_t sensor_ts) {
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 bool RawVideoPipeline::init(AAssetManager* assets, const dng::DngMeta& meta,
-                            int raw_w, int raw_h, int fps) {
+                            int raw_w, int raw_h, int fps, bool bin2) {
     if (ready_) return true;
     meta_  = meta;
     raw_w_ = raw_w;
     raw_h_ = raw_h;
     fps_   = fps > 0 ? fps : 30;
-    out_w_ = raw_w & ~1;
-    out_h_ = raw_h & ~1;
-    // Perceptual-bpp target from the real output geometry, clamped under the
-    // HEVC L6.0 High-tier ceiling (see kTargetBpp/kMaxBitrate above).
-    int64_t br = llround(kTargetBpp * out_w_ * out_h_ * fps_);
+    bin2_  = bin2;
+    // bin_isp.slang reads a RAW row as packed uint32 pairs (`rawBuf[idx >> 1]`),
+    // which only selects the right half of each word when a row starts on a word
+    // boundary. An odd width would invert that selection on every other row and
+    // produce garbage rather than an error, so refuse the binned path instead.
+    if (bin2_ && (raw_w & 1)) {
+        LOGE("RAW width %d is odd — binned path needs word-aligned rows; using full-res", raw_w);
+        bin2_ = false;
+    }
+    // On for the binned path: it removes the isolated colour speckle a
+    // demosaic-free bin leaves in shadows (R and B are single photosites there,
+    // so their noise lands almost entirely in chroma), and — like the NLM — that
+    // speckle is noise the encoder would otherwise have to spend bits describing.
+    // ~0.8 ms per pass. See docs/DORMANT_METHODS.md.
+    if (bin2_) chroma_enabled_.store(true, std::memory_order_relaxed);
+    // Binned: one output pixel per 2x2 CFA quad. The extra & ~1 matters — the
+    // P010 pack and the 4:2:0 chroma both work on 2x2 output quads, so an odd
+    // output dimension would leave a half-written edge row/column.
+    out_w_ = bin2_ ? ((raw_w / 2) & ~1) : (raw_w & ~1);
+    out_h_ = bin2_ ? ((raw_h / 2) & ~1) : (raw_h & ~1);
+    // Round the ENCODED size up to whole coding tree units. HEVC codes in 64x64
+    // CTUs anchored at the top-left corner, so a picture that is not a multiple
+    // of 64 leaves partial CTUs along the right and bottom edges; the encoder
+    // fills them itself and signals a conformance window, and an HEVC
+    // conformance window can only crop from the right and the bottom. That
+    // asymmetry is the fingerprint of the streaked ~1 mm border seen on every
+    // clip this project has ever produced (2040/64 = 31.875, 1530/64 = 23.9 —
+    // and the full-res path is no better at 4080/64 = 63.75, 3060/64 = 47.8).
+    //
+    // We ADD the missing rows and columns instead, filling them by replicating
+    // the last real column and row (the standard edge extension — a motion
+    // vector pointing into the pad then predicts from real picture content
+    // rather than from invented data). NOTHING IS CROPPED: the sensor's whole
+    // field of view survives untouched, the picture simply gains a few pixels of
+    // duplicated border. Both native geometries stay exactly 4:3 through this
+    // (2040x1530 -> 2048x1536, 4080x3060 -> 4096x3072), so the aspect ratio does
+    // not move either.
+    pad_w_ = (out_w_ + kCtuAlign - 1) / kCtuAlign * kCtuAlign;
+    pad_h_ = (out_h_ + kCtuAlign - 1) / kCtuAlign * kCtuAlign;
+    // Perceptual-bpp target from the ENCODED geometry (that is what the encoder
+    // actually spends bits on), clamped under the HEVC L6.0 High-tier ceiling
+    // (see kTargetBpp/kMaxBitrate above).
+    int64_t br = llround((bin2_ ? kTargetBppBinned : kTargetBpp) * pad_w_ * pad_h_ * fps_);
     bitrate_ = static_cast<int>(br < kMaxBitrate ? br : kMaxBitrate);
 
     if (meta_.has_neutral) {
@@ -252,8 +383,10 @@ bool RawVideoPipeline::init(AAssetManager* assets, const dng::DngMeta& meta,
         return false;
     }
     ready_ = true;
-    LOGI("RAW pipeline ready: %dx%d Bayer -> %dx%d P010 PQ @ %d Mbps (buffer input)",
-         raw_w_, raw_h_, out_w_, out_h_, bitrate_ / 1'000'000);
+    LOGI("RAW pipeline ready: %dx%d Bayer -> %dx%d P010 PQ%s @ %d Mbps "
+         "(encoded %dx%d, +%d/+%d CTU pad, buffer input)",
+         raw_w_, raw_h_, out_w_, out_h_, bin2_ ? " (bin2)" : "", bitrate_ / 1'000'000,
+         pad_w_, pad_h_, pad_w_ - out_w_, pad_h_ - out_h_);
     return true;
 }
 
@@ -326,6 +459,161 @@ static bool build_compute(VkCompute& vk, AAssetManager* assets, const char* spv,
     return true;
 }
 
+// Buffers + descriptors for the binned path. Called from build_vulkan once the
+// bin_isp / nlm_rgb pipelines exist. Per frame the chain is
+//   staging_[slot] (RAW16) -> f.rgb_buf (half-res linear RGB) -> f.out_buf (P010)
+// with both intermediates per-slot, so no cross-slot WAR barrier is ever needed.
+bool RawVideoPipeline::build_vulkan_binned(VkDevice dev) {
+    // 5 sets per in-flight slot: bin(2 bufs), nlm_rgb(3), and one per median
+    // pass (2 each) — the median runs three times, ping-ponging the scratches.
+    VkDescriptorPoolSize sizes[1] = {
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * kInFlight },
+    };
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets       = 5 * kInFlight;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes    = sizes;
+    if (vkCreateDescriptorPool(dev, &dpci, nullptr, &dpool_) != VK_SUCCESS) return false;
+
+    // RAW16 input ring — unchanged by binning: the camera still delivers full
+    // sensor resolution and bin_isp is what reduces it on the GPU.
+    VkDeviceSize raw_bytes = static_cast<VkDeviceSize>(raw_w_) * raw_h_ * 2;
+    bool raw_devlocal = true;
+    for (auto& st : staging_) {
+        if (!vk_.create_buffer(raw_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, st)) {
+            raw_devlocal = false;
+            if (!vk_.create_buffer(raw_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, st)) {
+                LOGE("RAW input buffer creation failed");
+                return false;
+            }
+        }
+    }
+
+    // Half-res linear camera RGB, 3 floats per pixel.
+    VkDeviceSize rgb_bytes  = static_cast<VkDeviceSize>(out_w_) * out_h_ * 3 * 4;
+    VkDeviceSize p010_bytes = static_cast<VkDeviceSize>(pad_w_) * pad_h_ * 3;
+    bool out_cached = true;
+    VkDescriptorBufferInfo raw0_info{ staging_[0].buf, 0, VK_WHOLE_SIZE };
+
+    for (int k = 0; k < kInFlight; ++k) {
+        InFlight& f = inflight_[k];
+
+        if (!vk_.create_buffer(rgb_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, f.rgb_buf)) {
+            LOGE("binned RGB buffer creation failed (slot %d)", k);
+            return false;
+        }
+        // Per-slot CbCr scratch for the chroma median: one packed (Cb,Cr) word per
+        // 4:2:0 site = (out_w/2)*(out_h/2)*4 bytes = out_w*out_h. Per-slot, not
+        // shared, so no cross-slot WAR barrier is needed (a shared intermediate is
+        // what serialised the in-flight ring before denoised_buf became per-slot).
+        VkDeviceSize chroma_bytes = static_cast<VkDeviceSize>(pad_w_) * pad_h_;
+        if (!vk_.create_buffer(chroma_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, f.chroma_buf)) {
+            LOGE("chroma scratch creation failed (slot %d)", k);
+            return false;
+        }
+        if (!vk_.create_buffer(chroma_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, f.chroma_buf2)) {
+            LOGE("chroma scratch 2 creation failed (slot %d)", k);
+            return false;
+        }
+        // Per-slot P010 output. Prefer cached host memory for the CPU readback.
+        if (!vk_.create_buffer(p010_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT, f.out_buf)) {
+            out_cached = false;
+            if (!vk_.create_buffer(p010_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, f.out_buf)) {
+                LOGE("P010 output buffer creation failed (slot %d)", k);
+                return false;
+            }
+        }
+
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool     = dpool_;
+        dsai.descriptorSetCount = 1;
+        dsai.pSetLayouts        = &bin_dsl_;
+        if (vkAllocateDescriptorSets(dev, &dsai, &f.bin_dset) != VK_SUCCESS) return false;
+        dsai.pSetLayouts        = &nrgb_dsl_;
+        if (vkAllocateDescriptorSets(dev, &dsai, &f.nrgb_dset) != VK_SUCCESS) return false;
+        dsai.pSetLayouts        = &cmed_dsl_;
+        if (vkAllocateDescriptorSets(dev, &dsai, &f.cmed_dset1) != VK_SUCCESS) return false;
+        dsai.pSetLayouts        = &cmed_dsl_;
+        if (vkAllocateDescriptorSets(dev, &dsai, &f.cmed_dset2) != VK_SUCCESS) return false;
+        dsai.pSetLayouts        = &cmed_dsl_;
+        if (vkAllocateDescriptorSets(dev, &dsai, &f.cd_dset) != VK_SUCCESS) return false;
+
+        VkDescriptorBufferInfo rgb_info{ f.rgb_buf.buf, 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo out_info{ f.out_buf.buf, 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo chroma_info { f.chroma_buf.buf,  0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo chroma2_info{ f.chroma_buf2.buf, 0, VK_WHOLE_SIZE };
+
+        auto wbuf = [](VkDescriptorSet set, uint32_t binding, const VkDescriptorBufferInfo* bi) {
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = set;
+            w.dstBinding      = binding;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo     = bi;
+            return w;
+        };
+        // bin_dset binding 0 is a placeholder repointed at the live staging slot
+        // each frame, exactly as the full-res raw-reading sets are.
+        const VkWriteDescriptorSet writes[] = {
+            wbuf(f.bin_dset,  0, &raw0_info),   // raw (placeholder)
+            wbuf(f.bin_dset,  1, &rgb_info),    // linear RGB out
+            wbuf(f.nrgb_dset, 0, &rgb_info),    // linear RGB in
+            wbuf(f.nrgb_dset, 1, &out_info),    // P010 out
+            wbuf(f.nrgb_dset, 2, &chroma_info), // CbCr scratch (median path)
+            // The three median passes ping-pong the two scratches:
+            //   1 chroma_buf -> chroma_buf2, 2 chroma_buf2 -> chroma_buf,
+            //   3 chroma_buf -> the P010 CbCr plane.
+            wbuf(f.cmed_dset1, 0, &chroma2_info), // dst = scratch 2
+            wbuf(f.cmed_dset1, 1, &chroma_info),  // src = noisy CbCr
+            wbuf(f.cmed_dset2, 0, &chroma_info),  // dst = scratch 1 (reused)
+            wbuf(f.cmed_dset2, 1, &chroma2_info), // src = once-medianed CbCr
+            wbuf(f.cd_dset,    0, &out_info),     // dst = P010 (CbCr written)
+            wbuf(f.cd_dset,    1, &chroma_info),  // src = twice-medianed CbCr
+        };
+        vkUpdateDescriptorSets(dev, static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
+
+        f.cmd   = vk_.alloc_cmd();
+        f.fence = vk_.create_fence(false);
+        if (f.cmd == VK_NULL_HANDLE || f.fence == VK_NULL_HANDLE) return false;
+
+        // Timestamp pool for real per-pass timing. Optional by design: a device
+        // whose compute family cannot timestamp still records normally, it just
+        // reports no per-pass numbers. Never a failure path.
+        if (vk_.timestamp_period_ns() > 0.0f) {
+            VkQueryPoolCreateInfo qpci{};
+            qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpci.queryCount = kTimestampSlots;
+            if (vkCreateQueryPool(dev, &qpci, nullptr, &f.qpool) != VK_SUCCESS)
+                f.qpool = VK_NULL_HANDLE;
+        }
+    }
+    gpu_timing_ = vk_.timestamp_period_ns() > 0.0f;
+    for (const auto& f : inflight_) if (f.qpool == VK_NULL_HANDLE) gpu_timing_ = false;
+    LOGI("GPU timing: %s (%.2f ns/tick)", gpu_timing_ ? "on" : "unavailable",
+         vk_.timestamp_period_ns());
+    LOGI("RAW input: %s | P010 readback: %s (%d-deep ring, bin2)",
+         raw_devlocal ? "DEVICE_LOCAL|HOST_VISIBLE" : "host-visible (uncached GPU reads!)",
+         out_cached ? "HOST_CACHED" : "uncached(slow!)", kInFlight);
+    return true;
+}
+
 bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
     if (!vk_.init()) return false;
     VkDevice dev = vk_.device();
@@ -339,6 +627,48 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
     // variant tried here smeared handheld motion), so they cost a descriptor
     // write per frame for nothing.
     // nlm_bayer.slang searches patches across all of them; downstream is unchanged.
+    // The binned path needs neither the Bayer NLM, the green prepass, the
+    // demosaic, nor the chroma denoise: bin_isp collapses each 2x2 quad to one
+    // pixel (so there is nothing to interpolate) and nlm_rgb denoises all three
+    // channels of that plane and develops it in the same pass. Building the
+    // full-res chain anyway would cost four pipelines and ~100 MB of buffers
+    // that no dispatch would ever reference.
+    if (bin2_) {
+        // ── Bin pass: binding 0 = raw buf, 1 = per-slot linear RGB. ──
+        VkDescriptorSetLayoutBinding bin_bind[2]{};
+        for (uint32_t i = 0; i < 2; ++i)
+            bin_bind[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        if (!build_compute(vk_, assets, "shaders/bin_isp.spv", bin_bind, 2,
+                           sizeof(BinPush), bin_dsl_, bin_layout_, bin_pipeline_))
+            return false;
+
+        // ── NLM+develop pass: binding 0 = linear RGB, 1 = P010 out. ──
+        // Same fp16 story as the Bayer NLM: this pass is bound by groupshared
+        // traffic and ALU rate, and half improves both.
+        const char* nrgb_spv = vk_.fp16_supported() ? "shaders/nlm_rgb_fp16.spv"
+                                                    : "shaders/nlm_rgb.spv";
+        LOGI("binned NLM kernel: %s", vk_.fp16_supported() ? "fp16" : "fp32");
+        // Binding 2 is the CbCr scratch the chroma median reads; it is bound
+        // whether or not the median runs (an unused binding costs nothing, and a
+        // conditional layout would mean two pipelines).
+        VkDescriptorSetLayoutBinding nr_bind[3]{};
+        for (uint32_t i = 0; i < 3; ++i)
+            nr_bind[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        if (!build_compute(vk_, assets, nrgb_spv, nr_bind, 3,
+                           sizeof(NlmRgbPush), nrgb_dsl_, nrgb_layout_, nrgb_pipeline_))
+            return false;
+
+        // ── Chroma median: binding 0 = P010 out (CbCr written), 1 = scratch. ──
+        VkDescriptorSetLayoutBinding cm_bind[2]{};
+        for (uint32_t i = 0; i < 2; ++i)
+            cm_bind[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+        if (!build_compute(vk_, assets, "shaders/chroma_median.spv", cm_bind, 2,
+                           sizeof(ChromaMedianPush), cmed_dsl_, cmed_layout_, cmed_pipeline_))
+            return false;
+
+        return build_vulkan_binned(dev);
+    }
+
     VkDescriptorSetLayoutBinding dn_bind[2]{};
     for (uint32_t i = 0; i < 2; ++i)
         dn_bind[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
@@ -420,7 +750,7 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
         }
     }
 
-    VkDeviceSize p010_bytes = static_cast<VkDeviceSize>(out_w_) * out_h_ * 3;  // Y + UV/2, 2B each
+    VkDeviceSize p010_bytes = static_cast<VkDeviceSize>(pad_w_) * pad_h_ * 3;  // Y + UV/2, 2B each
     bool out_cached = true;
     // Fixed buffer infos referenced by every slot's writes (binding 0 of the raw
     // sets is a placeholder repointed per frame in record_and_submit).
@@ -455,7 +785,7 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
 
         // Per-slot chroma scratch (device-local; one packed (Cb,Cr) word per
         // 4:2:0 site = out_w*out_h bytes). Only used on the CD path.
-        VkDeviceSize chroma_bytes = static_cast<VkDeviceSize>(out_w_) * out_h_;
+        VkDeviceSize chroma_bytes = static_cast<VkDeviceSize>(pad_w_) * pad_h_;
         if (!vk_.create_buffer(chroma_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, f.chroma_buf)) {
             LOGE("chroma scratch buffer creation failed (slot %d)", k);
@@ -480,7 +810,8 @@ bool RawVideoPipeline::build_vulkan(AAssetManager* assets) {
         if (vkAllocateDescriptorSets(dev, &dsai, &f.cd_dset) != VK_SUCCESS) return false;
 
         VkDescriptorBufferInfo out_info{ f.out_buf.buf,    0, VK_WHOLE_SIZE };
-        VkDescriptorBufferInfo chroma_info{ f.chroma_buf.buf, 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo chroma_info { f.chroma_buf.buf,  0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo chroma2_info{ f.chroma_buf2.buf, 0, VK_WHOLE_SIZE };
 
         auto wbuf = [](VkDescriptorSet set, uint32_t binding, const VkDescriptorBufferInfo* bi) {
             VkWriteDescriptorSet w{};
@@ -542,8 +873,8 @@ AMediaCodec* RawVideoPipeline::make_encoder() {
 
     AMediaFormat* fmt = AMediaFormat_new();
     AMediaFormat_setString(fmt, AMEDIAFORMAT_KEY_MIME, "video/hevc");
-    AMediaFormat_setInt32(fmt, "width",  out_w_);
-    AMediaFormat_setInt32(fmt, "height", out_h_);
+    AMediaFormat_setInt32(fmt, "width",  pad_w_);
+    AMediaFormat_setInt32(fmt, "height", pad_h_);
     AMediaFormat_setInt32(fmt, "color-format", kColorFormatYUVP010);
     AMediaFormat_setInt32(fmt, "profile", kHevcProfileMain10);
     AMediaFormat_setInt32(fmt, "frame-rate", fps_);
@@ -600,8 +931,8 @@ bool RawVideoPipeline::start() {
     // others; for P010 a value below width*2 can only be pixels.
     // AMediaCodec_getInputFormat is API 28; minSdk is 26, so resolve it at
     // runtime (any P010-capable device is API 33+ and has it).
-    enc_stride_bytes_ = out_w_ * 2;
-    enc_slice_height_ = out_h_;
+    enc_stride_bytes_ = pad_w_ * 2;
+    enc_slice_height_ = pad_h_;
     using GetInputFormatFn = AMediaFormat* (*)(AMediaCodec*);
     auto get_input_format = reinterpret_cast<GetInputFormatFn>(
         dlsym(RTLD_DEFAULT, "AMediaCodec_getInputFormat"));
@@ -609,8 +940,8 @@ bool RawVideoPipeline::start() {
     if (in_fmt) {
         int32_t v = 0;
         if (AMediaFormat_getInt32(in_fmt, "stride", &v) && v > 0)
-            enc_stride_bytes_ = (v < out_w_ * 2) ? v * 2 : v;
-        if (AMediaFormat_getInt32(in_fmt, "slice-height", &v) && v >= out_h_)
+            enc_stride_bytes_ = (v < pad_w_ * 2) ? v * 2 : v;
+        if (AMediaFormat_getInt32(in_fmt, "slice-height", &v) && v >= pad_h_)
             enc_slice_height_ = v;
         AMediaFormat_delete(in_fmt);
     }
@@ -626,12 +957,23 @@ bool RawVideoPipeline::start() {
     prof_drops_base_ = 0;
     stopping_ = false;
     running_  = true;
+    // A previous clip may have halted on an unreclaimable submission; the fences
+    // and command buffers are rebuilt-or-idle by then, so the next clip starts
+    // clean. (shutdown()/start() bracket the ring's lifetime.)
+    gpu_lost_.store(false, std::memory_order_relaxed);
     // Bounded RAM backlog between the camera and the offline NLM pipeline.
     store_.init(raw_w_, raw_h_);
-    LOGI("recording start [nlm-tiled-lds]: nlm=%s  demosaic=%s  chroma=%s",
-         denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
-         demosaic_hq_.load(std::memory_order_relaxed) ? "HQ" : "Malvar",
-         chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
+    if (bin2_)
+        LOGI("recording start [bin2]: %dx%d, nlm=%s h=%.2f S=%s (rgb), chroma-median=%s",
+             pad_w_, pad_h_,
+             denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
+             kNlmH, kUseSensorNoiseProfile ? "sensor" : "hardcoded",
+             chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
+    else
+        LOGI("recording start [nlm-tiled-lds]: nlm=%s  demosaic=%s  chroma=%s",
+             denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
+             demosaic_hq_.load(std::memory_order_relaxed) ? "HQ" : "Malvar",
+             chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
     pipeline_thread_ = std::thread(&RawVideoPipeline::pipeline_loop, this);
     drain_thread_    = std::thread(&RawVideoPipeline::drain_loop, this);
     return true;
@@ -671,6 +1013,9 @@ void RawVideoPipeline::shutdown() {
         vk_.destroy_buffer(f.denoised_buf);
         vk_.destroy_buffer(f.out_buf);
         vk_.destroy_buffer(f.chroma_buf);
+        vk_.destroy_buffer(f.rgb_buf);
+        vk_.destroy_buffer(f.chroma_buf2);
+        if (f.qpool) { vkDestroyQueryPool(dev, f.qpool, nullptr); f.qpool = VK_NULL_HANDLE; }
     }
     for (auto& s : staging_) vk_.destroy_buffer(s);
     vk_.destroy_buffer(green_buf_);
@@ -687,6 +1032,17 @@ void RawVideoPipeline::shutdown() {
     if (denoise_pipeline_) { vkDestroyPipeline(dev, denoise_pipeline_, nullptr); denoise_pipeline_ = VK_NULL_HANDLE; }
     if (denoise_layout_)   { vkDestroyPipelineLayout(dev, denoise_layout_, nullptr); denoise_layout_ = VK_NULL_HANDLE; }
     if (denoise_dsl_)      { vkDestroyDescriptorSetLayout(dev, denoise_dsl_, nullptr); denoise_dsl_ = VK_NULL_HANDLE; }
+    // Binned path (null on the full-res path, and vice versa — every handle is
+    // nulled right after its vkDestroy so a second teardown pass skips it).
+    if (nrgb_pipeline_) { vkDestroyPipeline(dev, nrgb_pipeline_, nullptr); nrgb_pipeline_ = VK_NULL_HANDLE; }
+    if (nrgb_layout_)   { vkDestroyPipelineLayout(dev, nrgb_layout_, nullptr); nrgb_layout_ = VK_NULL_HANDLE; }
+    if (nrgb_dsl_)      { vkDestroyDescriptorSetLayout(dev, nrgb_dsl_, nullptr); nrgb_dsl_ = VK_NULL_HANDLE; }
+    if (bin_pipeline_)  { vkDestroyPipeline(dev, bin_pipeline_, nullptr); bin_pipeline_ = VK_NULL_HANDLE; }
+    if (bin_layout_)    { vkDestroyPipelineLayout(dev, bin_layout_, nullptr); bin_layout_ = VK_NULL_HANDLE; }
+    if (cmed_pipeline_) { vkDestroyPipeline(dev, cmed_pipeline_, nullptr); cmed_pipeline_ = VK_NULL_HANDLE; }
+    if (cmed_layout_)   { vkDestroyPipelineLayout(dev, cmed_layout_, nullptr); cmed_layout_ = VK_NULL_HANDLE; }
+    if (cmed_dsl_)      { vkDestroyDescriptorSetLayout(dev, cmed_dsl_, nullptr); cmed_dsl_ = VK_NULL_HANDLE; }
+    if (bin_dsl_)       { vkDestroyDescriptorSetLayout(dev, bin_dsl_, nullptr); bin_dsl_ = VK_NULL_HANDLE; }
     vk_.destroy();
     ready_ = false;
 }
@@ -743,7 +1099,257 @@ void RawVideoPipeline::release_staging(int slot) {
     if (slot >= 0 && slot < kSlots) staging_busy_[slot] = false;
 }
 
+// Record + submit one frame on the binned path: bin_isp (RAW16 -> half-res
+// linear camera RGB) then nlm_rgb (denoise + develop + P010 pack). Two dispatches
+// where the full-res path needs up to four, each over a quarter of the pixels.
+// Kept separate from record_and_submit rather than branched into it: that
+// function is the tuned full-res hot path and there is nothing shared between
+// the two beyond the staging barrier and the submit.
+bool RawVideoPipeline::record_and_submit_binned(int inflight_idx, int staging_slot) {
+    InFlight& f = inflight_[inflight_idx];
+    const bool dn_on = denoise_enabled_.load(std::memory_order_relaxed);
+    const bool cm_on = chroma_enabled_.load(std::memory_order_relaxed);
+
+    // Repoint the bin pass at this frame's camera-written staging buffer. Only
+    // binding 0 moves; binding 1 (this slot's RGB buffer) is fixed at build.
+    {
+        VkDescriptorBufferInfo raw_info{ staging_[staging_slot].buf, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = f.bin_dset;
+        w.dstBinding      = 0;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo     = &raw_info;
+        vkUpdateDescriptorSets(vk_.device(), 1, &w, 0, nullptr);
+    }
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkResetCommandBuffer(f.cmd, 0);
+    vkBeginCommandBuffer(f.cmd, &bi);
+
+    // Per-pass GPU timing. The reset must be recorded before any write, and the
+    // stamps use BOTTOM_OF_PIPE so each one lands after the preceding dispatch
+    // has fully completed rather than when it was merely issued.
+    int ts = 0;
+    if (f.qpool) {
+        vkCmdResetQueryPool(f.cmd, f.qpool, 0, kTimestampSlots);
+        vkCmdWriteTimestamp(f.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, f.qpool, ts++);
+    }
+
+    // Camera's host write -> shader read.
+    {
+        VkBufferMemoryBarrier in_b{};
+        in_b.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        in_b.srcAccessMask       = VK_ACCESS_HOST_WRITE_BIT;
+        in_b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        in_b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        in_b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        in_b.buffer              = staging_[staging_slot].buf;
+        in_b.size                = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                             1, &in_b, 0, nullptr);
+    }
+
+    // ── Bin pass: raw -> this slot's half-res linear RGB. ──
+    {
+        BinPush bp{};
+        bp.out_w = static_cast<uint32_t>(out_w_);
+        bp.out_h = static_cast<uint32_t>(out_h_);
+        bp.raw_w = static_cast<uint32_t>(raw_w_);
+        bp.raw_h = static_cast<uint32_t>(raw_h_);
+        bp.cfa   = static_cast<uint32_t>(meta_.cfa);
+        bp.white = static_cast<float>(meta_.white_level);
+        for (int i = 0; i < 4; ++i) bp.black[i] = meta_.black_level[i];
+
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, bin_pipeline_);
+        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, bin_layout_,
+                                0, 1, &f.bin_dset, 0, nullptr);
+        vkCmdPushConstants(f.cmd, bin_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(bp), &bp);
+        // One thread per OUTPUT pixel.
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(out_w_) + 7) / 8,
+                        (static_cast<uint32_t>(out_h_) + 7) / 8, 1);
+        if (f.qpool) vkCmdWriteTimestamp(f.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.qpool, ts++);
+
+        // rgb_buf is per-slot, so this is an intra-frame dependency only — no
+        // cross-slot WAR barrier is needed (that is the whole point of per-slot).
+        VkBufferMemoryBarrier rgb_rd{};
+        rgb_rd.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        rgb_rd.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+        rgb_rd.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        rgb_rd.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        rgb_rd.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        rgb_rd.buffer              = f.rgb_buf.buf;
+        rgb_rd.size                = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                             1, &rgb_rd, 0, nullptr);
+    }
+
+    // ── NLM + develop + P010 pack: linear RGB -> this slot's out_buf. ──
+    {
+        NlmRgbPush np{};
+        // Bounds and strides are in the ENCODED (CTU-padded) domain: this pass
+        // is what fills the pad, so it must run over every padded pixel.
+        np.out_w          = static_cast<uint32_t>(pad_w_);
+        np.out_h          = static_cast<uint32_t>(pad_h_);
+        // The source it reads is only the real picture. load_rgb clamps to this,
+        // which replicates the last real column/row into the pad — and also keeps
+        // the padded dispatch from reading rgb_buf out of bounds.
+        np.src_w          = static_cast<uint32_t>(out_w_);
+        np.src_h          = static_cast<uint32_t>(out_h_);
+        np.stride_pixels  = static_cast<uint32_t>(pad_w_);
+        np.uv_word_offset = static_cast<uint32_t>(pad_w_) * pad_h_ / 2;  // Y uint16s / 2
+        np.pad[0] = np.pad[1] = 0;
+        // The noise model describes a single photosite; the binned plane is
+        // quieter (see kBinNoiseScale). Passing the raw figures would over-smooth.
+        // Prefer the sensor's MEASURED profile for this frame (set_noise_profile)
+        // — it tracks the live ISO, which is the whole reason the denoise is
+        // strong in a dark room and gentle in daylight without any control for
+        // the user to set. kNoiseK/kNoiseFloor remain the fallback for a HAL that
+        // reports no profile.
+        const bool have_np = kUseSensorNoiseProfile &&
+                             noise_valid_.load(std::memory_order_acquire);
+        const float nk = have_np ? noise_s_.load(std::memory_order_relaxed) : kNoiseK;
+        const float nf = have_np ? noise_o_.load(std::memory_order_relaxed) : kNoiseFloor;
+        // Shot slope and read floor rescale DIFFERENTLY once the guide is white
+        // balanced (see bin_noise_scale) — a single factor was only right while
+        // the guide was un-gained.
+        float shot_scale = kBinNoiseScale, floor_scale = kBinNoiseScale;
+        bin_noise_scale(shot_scale, floor_scale);
+        np.noise_k        = nk * shot_scale;
+        np.noise_floor    = nf * floor_scale;
+        np.h_scale        = kNlmH;
+        // bit 0 = denoise, bit 1 = divert CbCr to the scratch for the median.
+        np.flags          = (dn_on ? 1u : 0u) | (cm_on ? 2u : 0u);
+        for (int i = 0; i < 3; ++i) np.wb[i] = wb_[i].load(std::memory_order_relaxed);
+        np.wb[3] = kPqScale;
+        for (int i = 0; i < 3; ++i) {
+            np.ccm0[i] = ccm_[i];
+            np.ccm1[i] = ccm_[3 + i];
+            np.ccm2[i] = ccm_[6 + i];
+        }
+
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nrgb_pipeline_);
+        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nrgb_layout_,
+                                0, 1, &f.nrgb_dset, 0, nullptr);
+        vkCmdPushConstants(f.cmd, nrgb_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(np), &np);
+        // One thread per 2x2 output quad.
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(pad_w_) / 2 + 7) / 8,
+                        (static_cast<uint32_t>(pad_h_) / 2 + 7) / 8, 1);
+        if (f.qpool) vkCmdWriteTimestamp(f.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.qpool, ts++);
+    }
+
+    // ── 3x3 chroma median: scratch CbCr -> out_buf's CbCr. Luma untouched. ──
+    if (cm_on) {
+        // nlm_rgb wrote this slot's scratch; make it visible to the median read.
+        // Both buffers are per-slot, so this is an intra-frame dependency only.
+        VkBufferMemoryBarrier cm_pre{};
+        cm_pre.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        cm_pre.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+        cm_pre.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        cm_pre.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cm_pre.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cm_pre.buffer              = f.chroma_buf.buf;
+        cm_pre.size                = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                             1, &cm_pre, 0, nullptr);
+
+        const uint32_t cgx = (static_cast<uint32_t>(pad_w_) / 2 + 7) / 8;
+        const uint32_t cgy = (static_cast<uint32_t>(pad_h_) / 2 + 7) / 8;
+
+        ChromaMedianPush cm{};
+        cm.out_w      = static_cast<uint32_t>(pad_w_);
+        cm.out_h      = static_cast<uint32_t>(pad_h_);
+        // Every scratch and the P010 CbCr plane share the same pitch: the Y
+        // stride in pixels / 2, which is what nlm_rgb.slang used for its own
+        // chroma store (halfStride). They stay separate fields because
+        // submit_to_encoder already anticipates an encoder stride != out_w_*2.
+        cm.src_stride = static_cast<uint32_t>(pad_w_) / 2;
+        cm.dst_stride = static_cast<uint32_t>(pad_w_) / 2;
+
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cmed_pipeline_);
+
+        // Barrier between consecutive median passes: pass N's writes must be
+        // visible to pass N+1's reads. Every buffer here is per-slot, so this is
+        // an intra-frame dependency only and never serializes the in-flight ring.
+        auto median_barrier = [&](VkBuffer buf) {
+            VkBufferMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.buffer              = buf;
+            b.size                = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                                 1, &b, 0, nullptr);
+        };
+        auto median_pass = [&](VkDescriptorSet set, uint32_t dilation, uint32_t dst_offset) {
+            cm.dilation   = dilation;
+            cm.dst_offset = dst_offset;
+            vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cmed_layout_,
+                                    0, 1, &set, 0, nullptr);
+            vkCmdPushConstants(f.cmd, cmed_layout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(cm), &cm);
+            dispatch_banded(f.cmd, cgx, cgy, 1);
+            if (f.qpool)
+                vkCmdWriteTimestamp(f.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.qpool, ts++);
+        };
+
+        const uint32_t uv_off = static_cast<uint32_t>(pad_w_) * pad_h_ / 2;
+
+        // Pass 1, spacing 1: chroma_buf -> chroma_buf2. Isolated single-site dots.
+        median_pass(f.cmed_dset1, 1, 0);
+        median_barrier(f.chroma_buf2.buf);
+
+        // Pass 2, spacing 2: chroma_buf2 -> chroma_buf. This is the one that
+        // clears CLUSTERED speckle — a 2x2 blob is the majority of an adjacent
+        // 3x3 window and survives any number of spacing-1 passes, but the
+        // spacing-2 ring lies outside it, so it is outvoted. Same 9 taps, same
+        // 19 compares; only the staged tile is larger.
+        median_pass(f.cmed_dset2, 2, 0);
+        median_barrier(f.chroma_buf.buf);
+
+        // Pass 3, spacing 1: chroma_buf -> the P010 CbCr plane. Resolves anything
+        // pass 2 selected from two sites away against its immediate neighbours.
+        median_pass(f.cd_dset, 1, uv_off);
+    }
+    f.ts_count = ts;
+
+    VkBufferMemoryBarrier to_host{};
+    to_host.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    to_host.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+    to_host.dstAccessMask       = VK_ACCESS_HOST_READ_BIT;
+    to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_host.buffer              = f.out_buf.buf;
+    to_host.size                = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(f.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &to_host,
+                         0, nullptr);
+    vkEndCommandBuffer(f.cmd);
+
+    VkSubmitInfo si{};
+    si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &f.cmd;
+    if (vkQueueSubmit(vk_.queue(), 1, &si, f.fence) != VK_SUCCESS) {
+        LOGE("vkQueueSubmit failed");
+        return false;
+    }
+    f.submit_ns = clock_ns(CLOCK_MONOTONIC);
+    return true;
+}
+
 bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
+    if (bin2_) return record_and_submit_binned(inflight_idx, staging_slot);
+
     InFlight& f = inflight_[inflight_idx];
 
     const bool dn_on = denoise_enabled_.load(std::memory_order_relaxed);
@@ -892,10 +1498,10 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
     }  // if (hq_on)
 
     PushConstants pc{};
-    pc.out_w          = static_cast<uint32_t>(out_w_);
-    pc.out_h          = static_cast<uint32_t>(out_h_);
-    pc.stride_pixels  = static_cast<uint32_t>(out_w_);
-    pc.uv_word_offset = static_cast<uint32_t>(out_w_) * out_h_ / 2;  // Y uint16s / 2
+    pc.out_w          = static_cast<uint32_t>(pad_w_);
+    pc.out_h          = static_cast<uint32_t>(pad_h_);
+    pc.stride_pixels  = static_cast<uint32_t>(pad_w_);
+    pc.uv_word_offset = static_cast<uint32_t>(pad_w_) * pad_h_ / 2;  // Y uint16s / 2
     pc.raw_w          = static_cast<uint32_t>(raw_w_);
     pc.raw_h          = static_cast<uint32_t>(raw_h_);
     // Low 2 bits: CFA pattern. Bit 8: demosaic mode (1=HQ directional, reads the
@@ -918,8 +1524,8 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
                             0, 1, &isp_set, 0, nullptr);
     vkCmdPushConstants(f.cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    dispatch_banded(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
-                  (static_cast<uint32_t>(out_h_) / 2 + 7) / 8, 1);
+    dispatch_banded(f.cmd, (static_cast<uint32_t>(pad_w_) / 2 + 7) / 8,
+                  (static_cast<uint32_t>(pad_h_) / 2 + 7) / 8, 1);
 
     // ── Chroma denoise (CD): out_buf luma + noisy chroma scratch -> out_buf CbCr.
     if (cd_on) {
@@ -944,11 +1550,11 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
                              2, cd_pre, 0, nullptr);
 
         ChromaPush cp{};
-        cp.out_w          = static_cast<uint32_t>(out_w_);
-        cp.out_h          = static_cast<uint32_t>(out_h_);
-        cp.stride_pixels  = static_cast<uint32_t>(out_w_);
-        cp.uv_word_offset = static_cast<uint32_t>(out_w_) * out_h_ / 2;
-        cp.chroma_stride  = static_cast<uint32_t>(out_w_) / 2;
+        cp.out_w          = static_cast<uint32_t>(pad_w_);
+        cp.out_h          = static_cast<uint32_t>(pad_h_);
+        cp.stride_pixels  = static_cast<uint32_t>(pad_w_);
+        cp.uv_word_offset = static_cast<uint32_t>(pad_w_) * pad_h_ / 2;
+        cp.chroma_stride  = static_cast<uint32_t>(pad_w_) / 2;
         cp.radius         = kChromaRadius;
         cp.sigma_s        = kChromaSigmaS;
         cp.sigma_l        = kChromaSigmaL;
@@ -958,8 +1564,8 @@ bool RawVideoPipeline::record_and_submit(int inflight_idx, int staging_slot) {
                                 0, 1, &f.cd_dset, 0, nullptr);
         vkCmdPushConstants(f.cmd, chroma_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cp), &cp);
         // One thread per chroma site (one per 2x2 luma quad).
-        dispatch_banded(f.cmd, (static_cast<uint32_t>(out_w_) / 2 + 7) / 8,
-                      (static_cast<uint32_t>(out_h_) / 2 + 7) / 8, 1);
+        dispatch_banded(f.cmd, (static_cast<uint32_t>(pad_w_) / 2 + 7) / 8,
+                      (static_cast<uint32_t>(pad_h_) / 2 + 7) / 8, 1);
     }
 
     VkBufferMemoryBarrier to_host{};
@@ -997,14 +1603,51 @@ bool RawVideoPipeline::retire(int inflight_idx) {
     const int64_t gpu_dt = clock_ns(CLOCK_MONOTONIC) - f.submit_ns;
     prof_gpu_ns_ += gpu_dt;
     if (gpu_dt > prof_gpu_max_ns_) prof_gpu_max_ns_ = gpu_dt;
+
+    if (wr == VK_TIMEOUT) {
+        // 2 s is already far past any plausible frame, but a severely throttled
+        // GPU is slow, not broken — so give it one long grace period rather than
+        // abandoning the submission. Abandoning is the dangerous option: the
+        // command buffer stays PENDING and the fence stays in use, and the ring
+        // reuses this slot two frames later, where vkResetCommandBuffer +
+        // vkQueueSubmit on still-pending objects is undefined behaviour that
+        // faults or wedges the queue. Never return to that state.
+        LOGE("ISP dispatch fence timeout after 2s — waiting out the GPU");
+        wr = vkWaitForFences(vk_.device(), 1, &f.fence, VK_TRUE, 8'000'000'000ull);
+    }
+
     if (wr != VK_SUCCESS) {
-        // Do NOT reset the fence here: on timeout the submission is still in
-        // flight, and resetting a pending fence is undefined — the next wait on
-        // this slot would then block forever (or pass spuriously).
-        LOGE("ISP dispatch fence timeout");
+        // Still not done (or the device is lost). The submission can never be
+        // safely reclaimed, so this slot — and the ring with it — is finished.
+        // Do NOT reset the fence: resetting a pending fence is the same UB.
+        // pipeline_loop sees gpu_lost_ and stops developing, so no slot is ever
+        // reused; the clip finalizes with whatever was already encoded. Losing
+        // the tail of a recording is acceptable; corrupting the queue is not.
+        LOGE("ISP GPU unrecoverable (VkResult %d) — halting develop, keeping the clip", wr);
+        gpu_lost_.store(true, std::memory_order_release);
         return false;
     }
     vkResetFences(vk_.device(), 1, &f.fence);
+
+    // Real per-pass GPU time. The fence is signalled, so the results are ready
+    // and this never blocks. Unlike `gpu` (submit -> fence, which pipeline_loop's
+    // blocking pop pins to the camera period), these are the actual cost and are
+    // what any future quality increase must be budgeted against.
+    if (f.qpool && f.ts_count >= 2) {
+        uint64_t stamps[kTimestampSlots]{};
+        if (vkGetQueryPoolResults(vk_.device(), f.qpool, 0, static_cast<uint32_t>(f.ts_count),
+                                  sizeof(stamps), stamps, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            const double ns_per_tick = vk_.timestamp_period_ns();
+            for (int i = 0; i + 1 < f.ts_count; ++i) {
+                // Ticks wrap at timestampValidBits; a negative delta means a wrap
+                // straddled this frame, so drop it rather than log a wild number.
+                if (stamps[i + 1] < stamps[i]) continue;
+                prof_pass_ns_[i] += llround((stamps[i + 1] - stamps[i]) * ns_per_tick);
+            }
+            prof_pass_used_ = f.ts_count - 1;
+        }
+    }
     return true;
 }
 
@@ -1021,7 +1664,7 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
     size_t cap = 0;
     uint8_t* dst = AMediaCodec_getInputBuffer(codec_, static_cast<size_t>(idx), &cap);
     const size_t need = static_cast<size_t>(enc_stride_bytes_) * enc_slice_height_ +
-                        static_cast<size_t>(enc_stride_bytes_) * (out_h_ / 2);
+                        static_cast<size_t>(enc_stride_bytes_) * (pad_h_ / 2);
     if (!dst || cap < need) {
         LOGE("input buffer too small (%zu < %zu)", cap, need);
         AMediaCodec_queueInputBuffer(codec_, static_cast<size_t>(idx), 0, 0, 0, 0);
@@ -1030,16 +1673,16 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
 
     const int64_t copy_t0 = clock_ns(CLOCK_MONOTONIC);
     const auto* src = static_cast<const uint8_t*>(out.mapped);
-    const int tight = out_w_ * 2;
-    if (enc_stride_bytes_ == tight && enc_slice_height_ == out_h_) {
-        std::memcpy(dst, src, static_cast<size_t>(tight) * out_h_ * 3 / 2);
+    const int tight = pad_w_ * 2;
+    if (enc_stride_bytes_ == tight && enc_slice_height_ == pad_h_) {
+        std::memcpy(dst, src, static_cast<size_t>(tight) * pad_h_ * 3 / 2);
     } else {
-        for (int y = 0; y < out_h_; ++y)
+        for (int y = 0; y < pad_h_; ++y)
             std::memcpy(dst + static_cast<size_t>(y) * enc_stride_bytes_,
                         src + static_cast<size_t>(y) * tight, tight);
         uint8_t* dst_uv = dst + static_cast<size_t>(enc_stride_bytes_) * enc_slice_height_;
-        const uint8_t* src_uv = src + static_cast<size_t>(tight) * out_h_;
-        for (int y = 0; y < out_h_ / 2; ++y)
+        const uint8_t* src_uv = src + static_cast<size_t>(tight) * pad_h_;
+        for (int y = 0; y < pad_h_ / 2; ++y)
             std::memcpy(dst_uv + static_cast<size_t>(y) * enc_stride_bytes_,
                         src_uv + static_cast<size_t>(y) * tight, tight);
     }
@@ -1056,7 +1699,7 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
     if (++prof_count_ >= kProfileWindow) {
         double fps = prof_wall_ns_ > 0 ? 1e9 * prof_count_ / double(prof_wall_ns_) : 0.0;
         long long drops = static_cast<long long>(frames_dropped_.load(std::memory_order_relaxed) - prof_drops_base_);
-        LOGI("%.1f fps | gpu %.1f/%.0fms  enc-wait %.1f/%.0fms  cam-gap %.0fms  copy %.1fms  drops %lld | nlm=%s dm=%s cd=%s",
+        LOGI("%.1f fps | gpu %.1f/%.0fms  enc-wait %.1f/%.0fms  cam-gap %.0fms  copy %.1fms  drops %lld | nlm=%s dm=%s cd=%s bin=%s | S=%.5f O=%.6f",
              fps,
              prof_gpu_ns_ / 1e6 / prof_count_, prof_gpu_max_ns_ / 1e6,
              prof_encwait_ns_ / 1e6 / prof_count_, prof_encwait_max_ns_ / 1e6,
@@ -1064,7 +1707,33 @@ bool RawVideoPipeline::submit_to_encoder(const VkCompute::Buffer& out, int64_t t
              prof_copy_ns_ / 1e6 / prof_count_, drops,
              denoise_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
              demosaic_hq_.load(std::memory_order_relaxed) ? "HQ" : "Malvar",
-             chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off");
+             chroma_enabled_.load(std::memory_order_relaxed) ? "on" : "off",
+             bin2_ ? "on" : "off",
+             // The LIVE noise model, not the one latched at clip start: it tracks
+             // ISO, so a scene getting darker mid-take changes the denoise
+             // strength. Logging it only on first publish (as it was) hid exactly
+             // the variable the over/under-filtering analysis depends on.
+             noise_valid_.load(std::memory_order_acquire)
+                 ? noise_s_.load(std::memory_order_relaxed) : kNoiseK,
+             noise_valid_.load(std::memory_order_acquire)
+                 ? noise_o_.load(std::memory_order_relaxed) : kNoiseFloor);
+        // Real GPU cost per pass. `gpu` above saturates at the camera period
+        // whenever the ISP keeps up, so THIS is the line to read when deciding
+        // whether there is room for more work.
+        if (gpu_timing_ && prof_pass_used_ > 0) {
+            char buf[192]; int n = 0;
+            static const char* kPassName[] = { "bin", "nlm", "med1", "med2", "med3", "p6" };
+            double total = 0.0;
+            for (int i = 0; i < prof_pass_used_ && n < (int)sizeof(buf) - 24; ++i) {
+                const double ms = prof_pass_ns_[i] / 1e6 / prof_count_;
+                total += ms;
+                n += snprintf(buf + n, sizeof(buf) - n, " %s %.2f", kPassName[i], ms);
+            }
+            LOGI("  gpu-real:%s  = %.2f ms of %.1f ms budget (%.0f%% used)",
+                 buf, total, 1000.0 / fps_, 100.0 * total * fps_ / 1000.0);
+        }
+        for (auto& v : prof_pass_ns_) v = 0;
+
         prof_count_ = 0; prof_gpu_ns_ = prof_copy_ns_ = prof_encwait_ns_ = prof_wall_ns_ = 0;
         prof_gpu_max_ns_ = prof_encwait_max_ns_ = 0;
         prof_gap_max_ns_.store(0, std::memory_order_relaxed);
@@ -1139,6 +1808,14 @@ void RawVideoPipeline::pipeline_loop() {
             release_staging(inflight_[prev].staging_slot);
         }
 
+        // A lost GPU means the just-retired slot's submission is unreclaimable.
+        // Break BEFORE the ring rotates onto a slot whose fence/command buffer may
+        // still be pending — that reuse is the undefined behaviour retire() guards.
+        if (gpu_lost_.load(std::memory_order_acquire)) {
+            if (submitted) { prev = cur; }   // leave it unretired; teardown waits
+            break;
+        }
+
         if (submitted) {
             prev = cur;
             cur  = (cur + 1) % kInFlight;
@@ -1150,8 +1827,9 @@ void RawVideoPipeline::pipeline_loop() {
         }
     }
 
-    // Drain the last in-flight frame that hasn't been retired yet.
-    if (prev >= 0) {
+    // Drain the last in-flight frame that hasn't been retired yet. Skipped on a
+    // lost GPU: that wait already failed once and would only stall the stop path.
+    if (prev >= 0 && !gpu_lost_.load(std::memory_order_acquire)) {
         if (retire(prev))
             submit_to_encoder(inflight_[prev].out_buf, inflight_[prev].ts_ns);
         release_staging(inflight_[prev].staging_slot);
@@ -1186,7 +1864,7 @@ void RawVideoPipeline::drain_loop() {
             if (fmt && AMediaFormat_getBuffer(fmt, "csd-0", &csd, &csd_size) &&
                 csd && csd_size > 0 && !sent_format_ && on_format_) {
                 on_format_(static_cast<const uint8_t*>(csd),
-                           static_cast<int>(csd_size), out_w_, out_h_);
+                           static_cast<int>(csd_size), pad_w_, pad_h_);
                 sent_format_ = true;
             }
             if (fmt) AMediaFormat_delete(fmt);
@@ -1197,7 +1875,7 @@ void RawVideoPipeline::drain_loop() {
                 const uint8_t* data = buf + info.offset;
                 if (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG) {
                     if (!sent_format_ && on_format_) {
-                        on_format_(data, info.size, out_w_, out_h_);
+                        on_format_(data, info.size, pad_w_, pad_h_);
                         sent_format_ = true;
                     }
                 } else if (on_packet_) {
