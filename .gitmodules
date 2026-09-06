@@ -31,3 +31,6 @@
 [submodule "libs/thirdparty/libjxl"]
 	path = libs/thirdparty/libjxl
 	url = https://github.com/libjxl/libjxl
+[submodule "assets/fonts"]
+	path = assets/fonts
+	url = https://github.com/minervarr/fonts
