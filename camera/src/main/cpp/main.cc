@@ -6,6 +6,7 @@
 #include <string>
 
 void android_main(android_app* state) {
+#ifdef CAMERA_FILE_LOG
     if (state->activity->externalDataPath) {
         std::string log_path = std::string(state->activity->externalDataPath) + "/app.log";
         init_logger(log_path.c_str());
@@ -13,6 +14,9 @@ void android_main(android_app* state) {
         init_logger("/sdcard/Download/app.log");
     }
     LOGI("App started, logger initialized");
+#else
+    LOGI("App started");
+#endif
 
     // no launch extra, no fallback, no all-files-access prompt (camera uses
     // getExternalFilesDir, which is always granted).

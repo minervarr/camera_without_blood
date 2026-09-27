@@ -242,6 +242,12 @@ target_include_directories(camera_recorder PRIVATE
 
 target_compile_options(camera_recorder PRIVATE -O2)
 
+# app.log is a debug-only dump for offline diagnosis. assembleRelease must not
+# leave a log file in the host's app data dir.
+target_compile_definitions(camera_recorder PRIVATE
+    $<$<CONFIG:Debug>:CAMERA_FILE_LOG=1>
+)
+
 target_link_libraries(camera_recorder
     # Canvas + Font engine (vk_canvas_core links vk_font_core which links freetype + msdfgen)
     vk_canvas_core

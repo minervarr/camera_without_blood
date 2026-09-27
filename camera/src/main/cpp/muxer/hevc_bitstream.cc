@@ -120,4 +120,31 @@ void annexb_to_length_prefixed(const uint8_t* in, int len, std::vector<uint8_t>&
     }
 }
 
+bool access_unit_is_irap(const uint8_t* annexb, int len) {
+    if (!annexb || len <= 0) return false;
+    auto is_start = [&](int j, int& sc) -> bool {
+        if (j + 3 < len && annexb[j] == 0 && annexb[j+1] == 0 &&
+            annexb[j+2] == 0 && annexb[j+3] == 1) { sc = 4; return true; }
+        if (j + 2 < len && annexb[j] == 0 && annexb[j+1] == 0 &&
+            annexb[j+2] == 1) { sc = 3; return true; }
+        return false;
+    };
+    int sc = 0, i = 0;
+    while (i < len && !is_start(i, sc)) ++i;
+    while (i < len) {
+        i += sc;
+        if (i < len) {
+            const int nal = (annexb[i] >> 1) & 0x3F;
+            // HEVC VCL: 0–31. IRAP: IDR_W_RADL=19, IDR_N_LP=20, CRA=21.
+            if (nal == 19 || nal == 20 || nal == 21) return true;
+            if (nal <= 31) return false;
+        }
+        int next = i, nsc = 0;
+        while (next < len && !is_start(next, nsc)) ++next;
+        i = next;
+        sc = nsc;
+    }
+    return false;
+}
+
 } // namespace hevc

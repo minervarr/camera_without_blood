@@ -334,12 +334,15 @@ void Muxer::write_video(const uint8_t* data, int size, int64_t timestamp_ns, boo
     if (timestamp_ns > impl_->vid_last_ns) impl_->vid_last_ns = timestamp_ns;
     ++impl_->vid_frames;
 
-    // New cluster on each keyframe, when the current one grows too long, or when the
-    // block would fall outside the cluster's 16-bit ms timecode range in EITHER
-    // direction (|rel - base| > MAX_CLUSTER_NS) — the latter guards against a
-    // libmatroska abort if audio/video ever land in mismatched clock domains.
+    // New cluster when the current one grows too long, or when a real IDR
+    // arrives after the cluster already has content. Do NOT split on every
+    // keyframe blindly: MediaCodec on this device flags every HEVC buffer as a
+    // key, which used to open a cluster per frame (~30/s) and made players
+    // hitch at each cluster boundary.
+    const bool idr_split = keyframe && impl_->cluster &&
+        (rel - impl_->cluster_base) >= 500'000'000;
     if (!impl_->cluster ||
-        (keyframe && impl_->cluster_base != rel) ||
+        idr_split ||
         llabs(rel - impl_->cluster_base) > MAX_CLUSTER_NS) {
         impl_->flush_cluster();
         impl_->start_cluster(rel);

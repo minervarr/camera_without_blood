@@ -232,7 +232,10 @@ void Recorder::recycle_pkt_buffer(std::vector<uint8_t>&& buf) {
 
 // Each access unit: copy onto the mux queue and return immediately so the
 // encoder drain thread never blocks on muxer disk I/O.
-void Recorder::on_video_packet(const uint8_t* data, int len, int64_t pts_us, bool key) {
+void Recorder::on_video_packet(const uint8_t* data, int len, int64_t pts_us, bool /*key*/) {
+    // Qualcomm's HEVC encoder sets BUFFER_FLAG_KEY_FRAME on every buffer.
+    // The bitstream is a normal GOP (IDR then TRAIL_R); trust the NAL type.
+    const bool key = hevc::access_unit_is_irap(data, len);
     {
         std::lock_guard<std::mutex> lk(video_q_mtx_);
         video_q_.push(MuxPkt{ take_pkt_buffer(data, len), pts_us, key, /*is_audio*/false });
@@ -250,6 +253,12 @@ void Recorder::on_video_packet(const uint8_t* data, int len, int64_t pts_us, boo
 // resolution again (and to get the demosaic + Bayer-NLM chain back).
 // See RawVideoPipeline::init and isp/shaders_src/bin_isp.slang.
 constexpr bool kBinnedRawVideo = true;
+
+// Offline DeepFilterNet side-car (<clip>_ai.flac). Off: it is slower-than-
+// realtime at finalize (grows with clip length) and it loads three ONNX models
+// on the REC-start path, which stalls the UI thread and freezes the preview.
+// The .mkv already carries the untouched native-rate FLAC.
+constexpr bool kAiDenoise = false;
 
 void Recorder::choose_video_mode() {
     if (mode_chosen_) return;
@@ -556,7 +565,7 @@ bool Recorder::start_saving(const std::string& output_path) {
         audio_ok = audio_->open_internal();
     }
     if (audio_ok) {
-        audio_->start([this](const uint8_t* data, int bytes, int64_t ts) {
+        audio_ok = audio_->start([this](const uint8_t* data, int bytes, int64_t ts) {
             // Enqueue for the writer thread — never call write_audio here, or the
             // FLAC capture thread blocks on the muxer mutex during multi-MB video
             // cluster flushes (long enough to overrun the audio device at RAW-PQ
@@ -567,11 +576,9 @@ bool Recorder::start_saving(const std::string& output_path) {
             }
             video_q_cv_.notify_one();
         });
-        LOGI("Audio source: %s", usb_fd > 0 ? "USB DAC" : "internal mic");
-        
-        if (audio_->is_capturing()) {
-            // DeepFilterNet denoise side-car (<clip>_ai.flac). Surface the outcome:
-            // a silent failure here is indistinguishable from "AI audio doesn't work".
+        LOGI("Audio source: %s", audio_ok ? (usb_fd > 0 ? "USB DAC" : "internal mic") : "failed");
+
+        if (kAiDenoise && audio_->is_capturing()) {
             bool armed = audio_->start_ai_recording(output_path, assets_);
             LOGI("AI denoise: %s", armed
                  ? "ARMED — denoised <clip>_ai.flac will be written at finalize"
@@ -626,15 +633,11 @@ void Recorder::stop_saving() {
             std::lock_guard<std::mutex> lock(muxer_open_mutex_);
             if (muxer_opened_) { muxer_->close(); muxer_opened_ = false; }
         }
-        // Offline DeepFilterNet denoise of the whole clip -> <clip>_ai.flac side-car.
-        // Heavy + slower-than-realtime, so it runs here on the finalize thread (the
-        // UI keeps showing "Processing…"). The .mkv's clean audio track is already
-        // written; this produces the denoised companion track.
-        audio_->finalize_denoise();
-        // Report the denoised side-car (if one was written) so the embedded host
-        // gets it alongside the .mkv when the scene exits.
-        if (!audio_->ai_written_path().empty())
-            jni::session_record_file(audio_->ai_written_path());
+        if (kAiDenoise) {
+            audio_->finalize_denoise();
+            if (!audio_->ai_written_path().empty())
+                jni::session_record_file(audio_->ai_written_path());
+        }
         state_ = State::PREVIEW;
         LOGI("Recording finalized");
     });

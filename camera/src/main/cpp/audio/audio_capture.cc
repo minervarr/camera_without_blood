@@ -56,14 +56,26 @@ bool AudioCapture::open_fd(int fd, const AudioConfig& cfg) {
         return false;
     }
 
-    // Pick the HIGHEST quality the ADC advertises (debug: max everything).
+    // Record at 48 kHz when available. Some UAC2 devices reject GET_RANGE while
+    // their control interface is being discovered, so the USB driver supplies a
+    // conservative fallback rate list. Choosing its artificial maximum (384 kHz)
+    // labels a 48 kHz ADC stream as 384 kHz, producing 8x fast, high-pitched
+    // playback. 48 kHz is the video/Android native rate and is broadly supported.
     auto rates  = drv->getCaptureRates();
     auto depths = drv->getCaptureBitDepths();
     auto chans  = drv->getCaptureChannelCounts();
-    int rate  = rates.empty()  ? cfg_.sample_rate : *std::max_element(rates.begin(),  rates.end());
+    auto rate48 = std::find(rates.begin(), rates.end(), 48000);
+    int rate  = rate48 != rates.end() ? *rate48
+              : (rates.empty() ? cfg_.sample_rate : *std::max_element(rates.begin(), rates.end()));
     int depth = depths.empty() ? cfg_.bit_depth   : *std::max_element(depths.begin(), depths.end());
     int ch    = chans.empty()  ? cfg_.channels    : *std::max_element(chans.begin(),  chans.end());
-    drv->configureCapture(rate, ch, depth);
+    if (!drv->configureCapture(rate, ch, depth)) {
+        LOGE("open_fd: USB capture configuration failed (%dHz %dch %dbit)",
+             rate, ch, depth);
+        drv->close();
+        delete drv;
+        return false;
+    }
 
     // Adopt the device's actual negotiated format. Crucially use the SUBSLOT size
     // (the on-wire bytes per sample) to derive bit depth, so the PCM stride and
@@ -73,7 +85,7 @@ bool AudioCapture::open_fd(int fd, const AudioConfig& cfg) {
     int subslot      = drv->getConfiguredCaptureSubslotSize();
     cfg_.bit_depth   = subslot > 0 ? subslot * 8 : drv->getConfiguredCaptureBitDepth();
     driver_ = drv;
-    LOGI("USB audio (max) fd=%d → %dHz %dch %dbit (subslot=%d)",
+    LOGI("USB audio fd=%d → %dHz %dch %dbit (subslot=%d)",
          fd, cfg_.sample_rate, cfg_.channels, cfg_.bit_depth, subslot);
     return true;
 }
@@ -129,6 +141,29 @@ bool AudioCapture::start(FlacFrameCallback cb) {
     anchored_        = false;
     audio_base_ns_   = 0;
 
+    // Start the source before FLAC init. USB capture may rewrite the configured
+    // rate once iso packets reveal the ADC's real clock (GET_CUR stalls, and a
+    // fallback rate list can be 4–8× away from the wire). Labelling FLAC with
+    // the requested rate is how a 192 kHz stream becomes 4× slow / two octaves
+    // low, or a 48 kHz stream becomes chipmunk.
+    bool source_started = false;
+    if (use_internal_ && aaudio_stream_)
+        source_started = AAudioStream_requestStart(static_cast<AAudioStream*>(aaudio_stream_)) == AAUDIO_OK;
+    else if (driver_)
+        source_started = driver_->startCapture();
+    if (!source_started) {
+        LOGE("Audio source failed to start; not creating an empty FLAC track");
+        return false;
+    }
+    if (driver_) {
+        cfg_.sample_rate = driver_->getConfiguredCaptureRate();
+        cfg_.channels    = driver_->getConfiguredCaptureChannels();
+        int subslot      = driver_->getConfiguredCaptureSubslotSize();
+        cfg_.bit_depth   = subslot > 0 ? subslot * 8 : driver_->getConfiguredCaptureBitDepth();
+        LOGI("USB capture running at %dHz %dch %dbit (subslot=%d)",
+             cfg_.sample_rate, cfg_.channels, cfg_.bit_depth, subslot);
+    }
+
     // ── Configure + init the FLAC encoder ───────────────────────────────────────
     // Guard a degenerate negotiated format (e.g. a USB capture alt configureCapture
     // couldn't actually set, leaving rate/bits at 0). A 0 rate would also
@@ -143,6 +178,9 @@ bool AudioCapture::start(FlacFrameCallback cb) {
         (cfg_.bit_depth != 16 && cfg_.bit_depth != 24 && cfg_.bit_depth != 32)) {
         LOGE("Refusing audio: bad format rate=%d ch=%d bits=%d (need 16/24/32-bit)",
              cfg_.sample_rate, cfg_.channels, cfg_.bit_depth);
+        if (use_internal_ && aaudio_stream_)
+            AAudioStream_requestStop(static_cast<AAudioStream*>(aaudio_stream_));
+        else if (driver_) driver_->stopCapture();
         return false;
     }
 
@@ -182,6 +220,9 @@ bool AudioCapture::start(FlacFrameCallback cb) {
         LOGE("FLAC encoder init failed (rate=%d ch=%d bits=%d): status %d",
              cfg_.sample_rate, cfg_.channels, cfg_.bit_depth, status);
         if (encoder_) { FLAC__stream_encoder_delete(encoder_); encoder_ = nullptr; }
+        if (use_internal_ && aaudio_stream_)
+            AAudioStream_requestStop(static_cast<AAudioStream*>(aaudio_stream_));
+        else if (driver_) driver_->stopCapture();
         return false;
     }
     LOGI("FLAC encoder ready: %dHz %dch %dbit (%s)",
@@ -190,10 +231,6 @@ bool AudioCapture::start(FlacFrameCallback cb) {
 
     capturing_ = true;
     soxr_in_buf_.resize(FRAME_SAMPLES * cfg_.channels);
-    
-    if (use_internal_ && aaudio_stream_)
-        AAudioStream_requestStart(static_cast<AAudioStream*>(aaudio_stream_));
-    else if (driver_) driver_->startCapture();
     capture_thread_ = std::thread([this]{ capture_loop(); });
     LOGI("Audio capture + FLAC encoding started");
     return true;
